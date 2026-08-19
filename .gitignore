@@ -225,5 +225,7 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+bin/
+
 # User-downloaded gesture images and manifest
 /assets/
