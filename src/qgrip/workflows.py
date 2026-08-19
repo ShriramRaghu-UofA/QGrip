@@ -6,20 +6,18 @@ import json
 import threading
 import time
 import uuid
+from collections import deque
 from collections.abc import Callable
-from dataclasses import asdict, replace
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
-import pyarrow.parquet as pq
 
 from qgrip.artifacts import (
     export_capture,
-    latest_capture,
     new_capture_path,
-    subject_root,
     write_capture_header,
 )
 from qgrip.devices import SignalDevice, create_device
@@ -29,6 +27,7 @@ from qgrip.domain import (
     EpochMetric,
     JobStatus,
     Prediction,
+    QGripProfile,
     SGTProgress,
     SGTRequest,
     TrainingRequest,
@@ -84,9 +83,18 @@ class SGTService:
                             if gesture == "rest"
                             else (trial / profile.sgt.trials if request.proportional else 1.0)
                         )
+                        device.set_cue(gesture, activation)
                         if progress:
                             progress(
-                                SGTProgress("running", gesture, trial, total, 0, activation, output)
+                                SGTProgress(
+                                    "running",
+                                    gesture,
+                                    trial_number,
+                                    total,
+                                    0,
+                                    activation,
+                                    output,
+                                )
                             )
                         remaining = profile.sgt.duration_seconds
                         while remaining > 0:
@@ -115,7 +123,7 @@ class SGTService:
                                     SGTProgress(
                                         "running",
                                         gesture,
-                                        trial,
+                                        trial_number,
                                         total,
                                         elapsed,
                                         activation,
@@ -142,7 +150,28 @@ class SGTService:
 
 
 class TrainingService:
+    """Lazy facade keeping Torch optional until training is requested."""
+
     PRESET_VERSION = 1
+
+    def __init__(
+        self,
+        *,
+        epochs: int = 30,
+        batch_size: int = 128,
+        window_seconds: float = 1.0,
+        stride_seconds: float = 0.05,
+        export_onnx: bool = True,
+    ) -> None:
+        self._epochs = epochs
+        self._batch_size = batch_size
+        self._window_seconds = window_seconds
+        self._stride_seconds = stride_seconds
+        self._export_onnx = export_onnx
+
+    @property
+    def epochs(self) -> int:
+        return self._epochs
 
     def train(
         self,
@@ -150,96 +179,109 @@ class TrainingService:
         cancel: threading.Event,
         metric: Callable[[EpochMetric], None] | None = None,
     ) -> Path:
-        inputs = request.inputs or (latest_capture(request.profile, request.subject),)
-        if len(inputs) > 1 and not request.inputs:
-            raise ArtifactError("combining sessions requires explicit inputs")
-        tables = []
-        for path in inputs:
-            if path.suffix == ".jsonl":
-                parquet = path.with_suffix(".parquet")
-                if not parquet.exists():
-                    parquet = export_capture(path)
-                path = parquet
-            tables.append(pq.read_table(path).to_pandas())
-        frame = __import__("pandas").concat(tables, ignore_index=True)
-        feature_names = [column for column in frame.columns if column.startswith("channel_")]
-        classes = tuple(sorted(str(item) for item in frame["gesture"].unique()))
-        means = {
-            name: frame.loc[frame["gesture"] == name, feature_names].mean().astype(float).tolist()
-            for name in classes
-        }
-        run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
-        root = subject_root(request.profile, request.subject) / "models" / run_id
-        root.mkdir(parents=True, exist_ok=False)
-        metrics: list[EpochMetric] = []
-        for epoch in range(1, 6):
-            if cancel.is_set():
-                raise InterruptedError("training cancelled")
-            value = EpochMetric(epoch, 1 / (epoch + 1), min(0.99, 0.5 + epoch * 0.09))
-            metrics.append(value)
-            if metric:
-                metric(value)
-        checkpoint = root / "model.pt"
-        document = {
-            "format": "qgrip-centroid-v1",
-            "model": request.model,
-            "preset_version": self.PRESET_VERSION,
-            "classes": classes,
-            "features": feature_names,
-            "means": means,
-            "proportional": request.proportional,
-            "sample_rate_hz": request.profile.device.sample_rate_hz,
-            "channels": request.profile.device.channels,
-            "inputs": [str(path) for path in inputs],
-        }
-        checkpoint.write_text(json.dumps(document, indent=2), encoding="utf-8")
-        (root / "metrics.json").write_text(
-            json.dumps([asdict(item) for item in metrics], indent=2), encoding="utf-8"
-        )
-        (root / "metadata.json").write_text(json.dumps(document, indent=2), encoding="utf-8")
-        # Attempt valid ONNX export; the centroid checkpoint remains usable if it fails.
         try:
-            import torch
-
-            layer = torch.nn.Linear(len(feature_names), len(classes))
-            sample = torch.zeros((1, len(feature_names)))
-            torch.onnx.export(
-                layer,
-                (sample,),
-                root / "model.onnx",
-                input_names=["signal"],
-                output_names=["scores"],
+            from qgrip.training import TorchTrainingService, TrainingOptions
+        except ImportError as exc:
+            raise ArtifactError(
+                "training requires the qgrip train extra: uv sync --extra train"
+            ) from exc
+        return TorchTrainingService(
+            TrainingOptions(
+                epochs=self._epochs,
+                batch_size=self._batch_size,
+                window_seconds=self._window_seconds,
+                stride_seconds=self._stride_seconds,
+                export_onnx=self._export_onnx,
             )
-        except Exception as exc:
-            (root / "onnx-error.txt").write_text(str(exc), encoding="utf-8")
-        return checkpoint
+        ).train(request, cancel, metric)
 
 
 class InferenceService:
-    def __init__(self, model: str | Path) -> None:
+    """Stateful streaming inference using a self-describing Torch or ONNX model."""
+
+    def __init__(self, model: str | Path, backend: str = "auto") -> None:
         self.path = Path(model).resolve()
         try:
-            self.metadata = cast(dict[str, Any], json.loads(self.path.read_text(encoding="utf-8")))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ArtifactError(f"unsupported checkpoint {self.path}: {exc}") from exc
-        if self.metadata.get("format") != "qgrip-centroid-v1":
-            raise ArtifactError(f"unsupported checkpoint format: {self.metadata.get('format')}")
+            import torch
+
+            from qgrip.models import ONNXEMGClassifier, load_checkpoint, load_model_checkpoint
+        except ImportError as exc:
+            raise ArtifactError(
+                "inference requires the qgrip train extra: uv sync --extra train"
+            ) from exc
+        self._torch = torch
+        self._torch_model: Any | None = None
+        self._onnx_model: ONNXEMGClassifier | None = None
+        checkpoint_path = self.path
+        if self.path.suffix == ".onnx":
+            checkpoint_path = self.path.with_suffix(".pt")
+            backend = "onnx"
+        try:
+            self.metadata = load_checkpoint(checkpoint_path)
+        except (OSError, RuntimeError, ValueError, KeyError) as exc:
+            raise ArtifactError(f"unsupported checkpoint {checkpoint_path}: {exc}") from exc
+        requested_backend = backend
+        onnx_path = checkpoint_path.with_suffix(".onnx")
+        automatic = requested_backend == "auto"
+        if requested_backend == "auto":
+            requested_backend = "onnx" if onnx_path.exists() else "torch"
+        if requested_backend == "onnx":
+            if not onnx_path.exists():
+                raise ArtifactError(f"ONNX model not found beside checkpoint: {onnx_path}")
+            try:
+                self._onnx_model = ONNXEMGClassifier(onnx_path, prefer_cuda=True)
+            except (ImportError, OSError, RuntimeError) as exc:
+                if not automatic:
+                    raise ArtifactError(f"cannot load ONNX model {onnx_path}: {exc}") from exc
+                requested_backend = "torch"
+        if requested_backend == "torch":
+            torch_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            self._torch_model, self.metadata = load_model_checkpoint(checkpoint_path, torch_device)
+            self._torch_device = torch_device
+        elif requested_backend != "onnx":
+            raise ArtifactError(f"unsupported inference backend: {backend}")
+        self.backend = requested_backend
+        self.window_size = int(self.metadata["window_size"])
+        self.channels = int(self.metadata.get("n_channels", self.metadata.get("channels", 0)))
+        self.labels = tuple(str(value) for value in self.metadata["labels"])
+        self._samples: deque[tuple[float, ...]] = deque(maxlen=self.window_size)
 
     def predict(self, samples: tuple[tuple[float, ...], ...]) -> Prediction:
         started = time.perf_counter()
-        vector = np.asarray(samples, dtype=float).mean(axis=0)
-        means = cast(dict[str, list[float]], self.metadata["means"])
-        distances = {
-            name: float(np.linalg.norm(vector - np.asarray(center)))
-            for name, center in means.items()
-        }
-        gesture = min(distances, key=lambda name: distances[name])
-        confidence = 1 / (1 + distances[gesture])
-        activation = (
-            float(np.clip(np.sqrt(np.mean(vector**2)), 0, 1))
-            if self.metadata.get("proportional", True)
-            else 1.0
-        )
+        for sample in samples:
+            if len(sample) != self.channels:
+                raise ArtifactError(
+                    f"model expects {self.channels} channels, received {len(sample)}"
+                )
+            self._samples.append(sample)
+        window = np.zeros((self.window_size, self.channels), dtype=np.float32)
+        buffered = np.asarray(self._samples, dtype=np.float32)
+        if len(buffered):
+            window[-len(buffered) :] = buffered
+        if self._onnx_model is not None:
+            logits, activation_output = self._onnx_model.predict(window[None, ...])
+            scores = np.asarray(logits[0], dtype=float)
+        else:
+            if self._torch_model is None:
+                raise ArtifactError("Torch model is not loaded")
+            tensor = self._torch.from_numpy(window).unsqueeze(0).to(self._torch_device)
+            with self._torch.inference_mode():
+                output = self._torch_model(tensor)
+            if isinstance(output, tuple):
+                logits_tensor, activation_tensor = output
+                activation_output = activation_tensor.detach().cpu().numpy()
+            else:
+                logits_tensor = output
+                activation_output = None
+            scores = logits_tensor.detach().cpu().numpy()[0]
+        shifted = scores - scores.max()
+        probabilities = np.exp(shifted) / np.exp(shifted).sum()
+        index = int(probabilities.argmax())
+        gesture = self.labels[index]
+        confidence = float(probabilities[index])
+        activation = 1.0
+        if activation_output is not None:
+            activation = float(np.clip(np.asarray(activation_output).reshape(-1)[0], 0, 1))
         return Prediction(gesture, confidence, activation, (time.perf_counter() - started) * 1000)
 
 
@@ -307,12 +349,44 @@ class WorkflowCoordinator:
             with self._lock:
                 if self._status:
                     self._status = replace(
-                        self._status, progress=value.epoch / 5, metrics=tuple(metrics)
+                        self._status,
+                        progress=value.epoch / self.training.epochs,
+                        message=f"epoch {value.epoch}/{self.training.epochs}",
+                        metrics=tuple(metrics),
                     )
 
         return self._begin(
             "training", lambda: str(self.training.train(request, self._cancel, update))
         )
+
+    def start_inference(self, model: Path, profile: QGripProfile) -> JobStatus:
+        inference = InferenceService(model, profile.inference.backend)
+
+        def run() -> str:
+            device = create_device(profile.device)
+            try:
+                device.connect()
+                while not self._cancel.is_set():
+                    packet = device.read(
+                        max(1, int(device.sample_rate_hz * profile.inference.interval_seconds))
+                    )
+                    prediction = inference.predict(packet.samples)
+                    if prediction.confidence < profile.inference.confidence_gate:
+                        prediction = replace(prediction, gesture="rest")
+                    with self._lock:
+                        if self._status:
+                            self._status = replace(
+                                self._status,
+                                message=prediction.gesture,
+                                prediction=prediction,
+                            )
+                    if profile.device.kind == "synthetic":
+                        time.sleep(profile.inference.interval_seconds)
+                return str(model)
+            finally:
+                device.close()
+
+        return self._begin("inference", run)
 
     def cancel(self) -> None:
         self._cancel.set()

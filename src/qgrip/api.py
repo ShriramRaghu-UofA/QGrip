@@ -45,6 +45,10 @@ class CalibrationWire(WireModel):
     delta: float
 
 
+class InferenceWire(WireModel):
+    model: str
+
+
 def create_app(
     profile: QGripProfile | str | Path,
     *,
@@ -140,8 +144,8 @@ def create_app(
         return {"cancelled": True}
 
     @app.post("/api/v1/inference/start", dependencies=protected)
-    def start_inference(model: str) -> dict[str, object]:
-        return {"accepted": True, "model": model, "state": "ready"}
+    def start_inference(body: InferenceWire) -> dict[str, object]:
+        return asdict(owner.start_inference(Path(body.model).resolve(), current))
 
     @app.get("/api/v1/handi/status", dependencies=protected)
     async def handi_status() -> dict[str, object]:

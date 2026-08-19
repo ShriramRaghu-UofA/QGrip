@@ -14,6 +14,25 @@ export interface JobStatus {
   progress?: number;
   message?: string;
   result?: string;
+  prediction?: Prediction;
+  metrics?: EpochMetric[];
+}
+
+export interface Prediction {
+  gesture: string;
+  confidence: number;
+  activation: number;
+  latency_ms: number;
+}
+
+export interface EpochMetric {
+  epoch: number;
+  loss: number;
+  accuracy: number;
+}
+
+export interface ArtifactList {
+  artifacts: string[];
 }
 
 export class QGripApi {

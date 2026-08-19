@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { Bootstrap, JobStatus } from './api';
+  import type { ArtifactList, Bootstrap, JobStatus, Prediction } from './api';
   import { QGripApi } from './api';
   import MetricPlot from './MetricPlot.svelte';
   import StagePanel from './StagePanel.svelte';
@@ -15,9 +15,15 @@
   let theme: Theme = $state('dracula');
   let bootstrap = $state.raw<Bootstrap | null>(null);
   let status = $state.raw<JobStatus>({ state: 'idle' });
+  let artifacts = $state.raw<string[]>([]);
+  let capturePath = $state('');
+  let trainingInput = $state('');
+  let modelPath = $state('');
+  let predictionHistory = $state.raw<Prediction[]>([]);
   let error = $state('');
   let online = $state(true);
   let polling: number | undefined;
+  let statusPath = '/api/v1/training/status';
 
   const stageIndex = $derived(stages.indexOf(stage));
   const progress = $derived(Math.round((status.progress ?? 0) * 100));
@@ -41,15 +47,24 @@
     try {
       bootstrap = await api.request<Bootstrap>('/api/v1/bootstrap');
       model = bootstrap.models[0] ?? 'transformer';
+      await loadArtifacts();
       error = '';
     } catch (cause) {
       error = cause instanceof Error ? cause.message : String(cause);
     }
   }
 
-  async function start(path: string, body: object): Promise<void> {
+  async function loadArtifacts(): Promise<void> {
+    const response = await api.request<ArtifactList>(`/api/v1/artifacts?subject=${encodeURIComponent(subject)}`);
+    artifacts = response.artifacts ?? [];
+    trainingInput ||= artifacts.find((path) => path.endsWith('.parquet')) ?? '';
+    modelPath ||= artifacts.find((path) => path.endsWith('.pt')) ?? '';
+  }
+
+  async function start(path: string, body: object, nextStatusPath: string): Promise<void> {
     try {
       status = await api.request<JobStatus>(path, { method: 'POST', body: JSON.stringify(body) });
+      statusPath = nextStatusPath;
       error = '';
       window.clearInterval(polling);
       polling = window.setInterval(() => void poll(), 500);
@@ -60,8 +75,17 @@
 
   async function poll(): Promise<void> {
     try {
-      status = await api.request<JobStatus>('/api/v1/training/status');
-      if (status.state !== 'running') window.clearInterval(polling);
+      status = await api.request<JobStatus>(statusPath);
+      if (status.prediction) {
+        predictionHistory = [...predictionHistory.slice(-79), status.prediction];
+      }
+      if (status.state !== 'running') {
+        window.clearInterval(polling);
+        if (status.kind === 'sgt' && status.result) capturePath = status.result;
+        if (status.kind === 'export' && status.result) trainingInput = status.result;
+        if (status.kind === 'training' && status.result) modelPath = status.result;
+        await loadArtifacts();
+      }
     } catch (cause) {
       error = cause instanceof Error ? cause.message : String(cause);
     }
@@ -110,24 +134,29 @@
         <StagePanel title="Setup" description="Choose a subject, validate the profile, and confirm device readiness." active>
           <fieldset class="fieldset"><legend class="fieldset-legend">Subject</legend><input class="input w-full" bind:value={subject} autocomplete="off" /></fieldset>
           <div class="stats stats-vertical bg-base-300 sm:stats-horizontal"><div class="stat"><div class="stat-title">Device</div><div class="stat-value text-xl">{bootstrap?.device ?? 'Loading…'}</div></div><div class="stat"><div class="stat-title">Profile</div><div class="stat-desc max-w-72 truncate">{bootstrap?.profile ?? '—'}</div></div></div>
-          <div class="card-actions justify-end"><button class="btn btn-primary" onclick={() => void api.request('/api/v1/doctor').catch((cause) => (error = String(cause)))}>Check readiness</button><button class="btn" onclick={() => (stage = 'Collect')}>Continue</button></div>
+          <div class="card-actions justify-end"><button class="btn btn-primary" onclick={() => void api.request('/api/v1/doctor').catch((cause) => (error = String(cause)))}>Check readiness</button><button class="btn" onclick={() => { void loadArtifacts(); stage = 'Collect'; }}>Continue</button></div>
         </StagePanel>
       {:else if stage === 'Collect'}
         <StagePanel title="Collect" description="Backend timing and markers drive calibration, practice, and gesture trials." active>
           <div class="text-center"><div class="text-6xl font-black">{status.message || 'Ready'}</div><progress class="progress progress-primary mt-5 w-full" value={progress} max="100"></progress><p>{progress}% complete</p></div>
-          <div class="card-actions justify-end"><button class="btn btn-error btn-outline" onclick={() => void api.request('/api/v1/sgt/command?command=abort', { method: 'POST' })}>Abort</button><button class="btn btn-primary" onclick={() => void start('/api/v1/sgt/start', { subject, discrete: false })}>Start collection</button></div>
+          {#if capturePath}<div class="alert alert-success"><span>Capture saved: {capturePath}</span></div>{/if}
+          <div class="card-actions justify-end"><button class="btn btn-error btn-outline" onclick={() => void api.request('/api/v1/sgt/command?command=abort', { method: 'POST' })}>Abort</button>{#if capturePath}<button class="btn btn-secondary" onclick={() => void start('/api/v1/export/start', { capture: capturePath }, '/api/v1/export/status')}>Export Parquet</button>{/if}<button class="btn btn-primary" onclick={() => void start('/api/v1/sgt/start', { subject, discrete: false }, '/api/v1/sgt/status')}>Start collection</button></div>
         </StagePanel>
       {:else if stage === 'Train'}
         <StagePanel title="Train" description="Use the latest compatible session by default or explicitly combine sessions." active>
           <select class="select w-full" bind:value={model} aria-label="Model preset">{#each bootstrap?.models ?? [] as item (item)}<option value={item}>{item}</option>{/each}</select>
+          <select class="select w-full" bind:value={trainingInput} aria-label="Training session"><option value="">Latest compatible session</option>{#each artifacts.filter((path) => path.endsWith('.parquet')) as path (path)}<option value={path}>{path}</option>{/each}</select>
           <progress class="progress progress-secondary w-full" value={progress} max="100"></progress>
-          <div class="card-actions justify-end"><button class="btn" onclick={() => void api.request('/api/v1/training/cancel', { method: 'POST' })}>Cancel</button><button class="btn btn-secondary" onclick={() => void start('/api/v1/training/start', { subject, model, inputs: [], discrete: false })}>Train model</button></div>
+          {#if status.metrics?.length}<div class="stats bg-base-300"><div class="stat"><div class="stat-title">Validation accuracy</div><div class="stat-value text-xl">{Math.round((status.metrics.at(-1)?.accuracy ?? 0) * 100)}%</div><div class="stat-desc">Loss {(status.metrics.at(-1)?.loss ?? 0).toFixed(4)}</div></div></div>{/if}
+          {#if modelPath}<div class="alert alert-success"><span>Checkpoint ready: {modelPath}</span></div>{/if}
+          <div class="card-actions justify-end"><button class="btn" onclick={() => void api.request('/api/v1/training/cancel', { method: 'POST' })}>Cancel</button><button class="btn btn-secondary" onclick={() => void start('/api/v1/training/start', { subject, model, inputs: trainingInput ? [trainingInput] : [], discrete: false }, '/api/v1/training/status')}>Train model</button></div>
         </StagePanel>
       {:else if stage === 'Validate'}
         <StagePanel title="Validate" description="Inspect class, confidence, activation, signal health, and end-to-end latency." active>
-          <div class="stats stats-vertical bg-base-300 sm:stats-horizontal"><div class="stat"><div class="stat-title">Class</div><div class="stat-value">rest</div></div><div class="stat"><div class="stat-title">Confidence</div><div class="stat-value text-success">—</div></div><div class="stat"><div class="stat-title">Latency</div><div class="stat-value">— ms</div></div></div>
-          <MetricPlot />
-          <div class="alert"><span>Start inference when a compatible checkpoint is selected.</span></div>
+          <select class="select w-full" bind:value={modelPath} aria-label="Inference checkpoint"><option value="">Select a checkpoint</option>{#each artifacts.filter((path) => path.endsWith('.pt')) as path (path)}<option value={path}>{path}</option>{/each}</select>
+          <div class="stats stats-vertical bg-base-300 sm:stats-horizontal"><div class="stat"><div class="stat-title">Class</div><div class="stat-value">{status.prediction?.gesture ?? '—'}</div></div><div class="stat"><div class="stat-title">Confidence</div><div class="stat-value text-success">{status.prediction ? `${Math.round(status.prediction.confidence * 100)}%` : '—'}</div></div><div class="stat"><div class="stat-title">Activation</div><div class="stat-value">{status.prediction ? `${Math.round(status.prediction.activation * 100)}%` : '—'}</div></div><div class="stat"><div class="stat-title">Latency</div><div class="stat-value">{status.prediction ? status.prediction.latency_ms.toFixed(1) : '—'} ms</div></div></div>
+          <MetricPlot history={predictionHistory} />
+          <div class="card-actions justify-end"><button class="btn" onclick={() => void api.request('/api/v1/inference/stop', { method: 'POST' })}>Stop</button><button class="btn btn-primary" disabled={!modelPath} onclick={() => void start('/api/v1/inference/start', { model: modelPath }, '/api/v1/inference/status')}>Start live inference</button></div>
         </StagePanel>
       {:else}
         <StagePanel title="Handi" description="Observe the remote standalone controller and perform bounded calibration." active>

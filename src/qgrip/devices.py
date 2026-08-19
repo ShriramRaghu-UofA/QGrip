@@ -39,6 +39,8 @@ class SignalDevice(Protocol):
 
     def connect(self) -> None: ...
 
+    def set_cue(self, gesture: str, activation: float) -> None: ...
+
     def read(self, count: int) -> SignalPacket: ...
 
     def close(self) -> None: ...
@@ -52,6 +54,8 @@ class SyntheticDevice:
         self._connected = False
         self._offset = 0
         self._random = np.random.default_rng(config.seed)
+        self._gesture_index = 0
+        self._activation = 0.0
 
     @property
     def sample_rate_hz(self) -> float:
@@ -64,14 +68,23 @@ class SyntheticDevice:
     def connect(self) -> None:
         self._connected = True
 
+    def set_cue(self, gesture: str, activation: float) -> None:
+        """Select a reproducible class-specific waveform for synthetic workflows."""
+        self._gesture_index = sum((index + 1) * ord(value) for index, value in enumerate(gesture))
+        self._activation = activation
+
     def read(self, count: int) -> SignalPacket:
         if not self._connected:
             raise DeviceError("synthetic device is not connected")
         indices = np.arange(self._offset, self._offset + count, dtype=float)
         waves = []
         for channel in range(self.channels):
-            signal = np.sin(2 * math.pi * (8 + channel) * indices / self.sample_rate_hz)
-            waves.append(signal + self._random.normal(0, 0.03, count))
+            frequency = 5 + self._gesture_index % 17 + channel * 0.5
+            amplitude = 0.15 + 0.85 * self._activation
+            signal = amplitude * np.sin(
+                2 * math.pi * frequency * indices / self.sample_rate_hz + channel * 0.2
+            )
+            waves.append(signal + self._random.normal(0, 0.015, count))
         self._offset += count
         return SignalPacket(
             time.time(),
@@ -111,6 +124,9 @@ class MyoDeviceAdapter:
         except Exception as exc:
             self._device = None
             raise DeviceError(f"Myo connection failed: {exc}") from exc
+
+    def set_cue(self, gesture: str, activation: float) -> None:
+        """Physical devices observe cues but do not synthesize their signal."""
 
     def read(self, count: int) -> SignalPacket:
         if self._device is None:
@@ -157,6 +173,9 @@ class SiFiDeviceAdapter:
             raise
         except Exception as exc:
             raise DeviceError(f"SiFi connection failed: {exc}") from exc
+
+    def set_cue(self, gesture: str, activation: float) -> None:
+        """Physical devices observe cues but do not synthesize their signal."""
 
     def read(self, count: int) -> SignalPacket:
         if self._device is None:

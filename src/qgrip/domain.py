@@ -189,3 +189,4 @@ class JobStatus:
     message: str = ""
     result: str | None = None
     metrics: tuple[EpochMetric, ...] = field(default_factory=tuple)
+    prediction: Prediction | None = None

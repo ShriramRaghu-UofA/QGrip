@@ -171,7 +171,7 @@ def dispatch(args: argparse.Namespace) -> int:
         )
         print(TrainingService().train(request, threading.Event()))
     elif args.command == "infer":
-        inference = InferenceService(args.model)
+        inference = InferenceService(args.model, profile.inference.backend)
         device = create_device(profile.device)
         try:
             device.connect()

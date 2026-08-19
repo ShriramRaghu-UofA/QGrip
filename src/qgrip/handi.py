@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from typing import Protocol
@@ -140,7 +141,7 @@ class HandiRuntime:
         if profile.handi is None or not profile.handi.enabled:
             raise ValidationError("profile does not enable Handi")
         self.profile = profile
-        self.model = InferenceService(model)
+        self.model = InferenceService(model, profile.inference.backend)
         self.device = device_factory(profile.device)
         config = profile.handi
         self.controller = HandController(
@@ -181,6 +182,8 @@ class HandiRuntime:
                 prediction = self.model.predict(packet.samples)
                 if prediction.confidence >= self.profile.inference.confidence_gate:
                     self.controller.apply_prediction(prediction)
+                if self.profile.device.kind == "synthetic":
+                    time.sleep(self.profile.inference.interval_seconds)
         except BaseException as exc:
             self.controller.fail(str(exc))
             raise

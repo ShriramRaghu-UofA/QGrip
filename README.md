@@ -61,6 +61,24 @@ The compiled dashboard is included in the Python wheel; Node and the frontend
 source tree are not required to run it. Use Node only when developing or rebuilding
 the frontend.
 
+The dashboard guides the complete workflow:
+
+1. **Setup** validates the selected profile and acquisition device.
+2. **Collect** runs SGT and preserves the authoritative JSONL capture.
+3. **Export** derives the canonical training Parquet from that capture.
+4. **Train** fits the selected Torch model and writes `model.pt`, `model.onnx`,
+   `metadata.json`, and `metrics.json` under `data/<subject>/models/<run-id>/`.
+5. **Validate** starts live acquisition and displays the predicted gesture,
+   confidence, proportional activation, latency, and prediction history.
+
+Training is implemented directly in QGrip. The `transformer`, `cnn1d`, `cnn2d`,
+and `dense` presets share an `EMGPreprocessor` module that owns normalization and
+`torch.stft`. Proportional models learn an activation head; discrete models expose
+the same inference contract with activation fixed at `1.0`. Inference automatically
+uses the adjacent ONNX model when available and otherwise uses the Torch checkpoint.
+No scripts or Python modules are loaded from the reference acquisition repository at
+runtime.
+
 Packaged templates for `synthetic`, `sifi`, `myo_ble`, and `myo_dongle` live in
 `src/qgrip/profile_templates`. Myo support uses the attributed PyoMyo source vendored
 from the reference acquisition repository; PyoMyo itself is not installed.

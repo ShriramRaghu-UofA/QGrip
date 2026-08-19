@@ -18,11 +18,12 @@ dependencies = [
 
 [project.optional-dependencies]
 myo = [
-    "bleak>=1,<2",
+    "bleak>=3.0.2",
     "pyserial>=3.5,<4",
 ]
 train = [
     "onnx>=1.18,<2",
+    "onnxscript>=0.7.1",
     "pandas>=3.0.5",
     "scikit-learn>=1.7,<2",
     "torch>=2.8,<3",

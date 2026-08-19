@@ -10,8 +10,8 @@ def write_profile(root: Path, *, handi: bool = False) -> Path:
         "device": {"kind": "synthetic", "sample_rate_hz": 200, "channels": 8, "seed": 1},
         "sgt": {
             "gestures": ["rest", "open", "close"],
-            "trials": 1,
-            "duration_seconds": 0.01,
+            "trials": 2,
+            "duration_seconds": 0.05,
             "practice": False,
             "proportional": True,
             "activation_calibration": True,

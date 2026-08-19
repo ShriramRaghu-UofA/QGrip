@@ -79,12 +79,20 @@ def export_capture(path: str | Path) -> Path:
         gesture = str(packet.get("gesture", "unknown"))
         activation = float(cast(float, packet.get("activation", 1.0)))
         timestamp = float(cast(float, packet.get("timestamp", 0)))
+        trial = int(cast(int, packet.get("trial", 0)))
+        sequence = int(cast(int, packet.get("sequence", 0)))
         samples = cast(list[list[float]], packet.get("samples", []))
         for sample_index, sample in enumerate(samples):
             record: dict[str, object] = {
                 "timestamp": timestamp + sample_index / metadata.sample_rate_hz,
                 "gesture": gesture,
                 "activation": activation,
+                "trial": trial,
+                "sequence": sequence,
+                "capture_file": str(metadata.path),
+                "device": metadata.device,
+                "sample_rate": metadata.sample_rate_hz,
+                "sample_index_in_packet": sample_index,
             }
             record.update({f"channel_{index}": value for index, value in enumerate(sample)})
             records.append(record)
@@ -99,9 +107,6 @@ def export_capture(path: str | Path) -> Path:
 
 def discover_artifacts(profile: QGripProfile, subject: str | None = None) -> tuple[Path, ...]:
     roots = [profile.data_root]
-    legacy = profile.path.parent / "Data"
-    if legacy.exists():
-        roots.append(legacy)
     found: list[Path] = []
     for root in roots:
         scope = root / subject if subject else root

@@ -2,10 +2,15 @@
   import type { Attachment } from 'svelte/attachments';
   import uPlot from 'uplot';
 
+  import type { Prediction } from './api';
+
+  let { history = [] }: { history?: Prediction[] } = $props();
+
   const renderPlot: Attachment<HTMLDivElement> = (container) => {
-    const time = Array.from({ length: 80 }, (_, index) => index / 20);
-    const confidence = time.map((value) => 0.55 + Math.sin(value * 4) * 0.12);
-    const activation = time.map((value) => 0.35 + Math.cos(value * 3) * 0.18);
+    const values = history.length ? history : [{ confidence: 0, activation: 0 }];
+    const time = values.map((_, index) => index);
+    const confidence = values.map((value) => value.confidence);
+    const activation = values.map((value) => value.activation);
     const instance = new uPlot(
       {
         width: Math.max(320, container.clientWidth),
