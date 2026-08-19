@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "data_root": "../../data",
+  "assets_root": "../../assets/gestures",
+  "device": {
+    "kind": "myo_ble",
+    "sample_rate_hz": 200,
+    "channels": 8
+  },
+  "sgt": {
+    "gestures": ["rest", "open", "close"],
+    "trials": 3,
+    "duration_seconds": 4,
+    "practice": true,
+    "proportional": true,
+    "activation_calibration": true
+  },
+  "model": {"name": "transformer", "preset_version": 1},
+  "inference": {
+    "backend": "auto",
+    "confidence_gate": 0.6,
+    "interval_seconds": 0.05,
+    "switch_samples": 3
+  },
+  "dashboard": {"host": "127.0.0.1", "port": 8765}
+}

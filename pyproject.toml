@@ -1,0 +1,78 @@
+[project]
+name = "qgrip"
+version = "0.1.0"
+description = "Typed EMG acquisition, training, inference, and Handi hand control"
+readme = "README.md"
+authors = [
+    { name = "Shriram Raghu", email = "190406643+ShriramRaghu-UofA@users.noreply.github.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.116,<1",
+    "numpy>=2.3,<3",
+    "pydantic>=2.11,<3",
+    "pyarrow>=25",
+    "sifi-streamer @ git+https://github.com/BLINCdev/sifi-streamer.git@v0.6.4",
+    "uvicorn>=0.35,<1",
+]
+
+[project.optional-dependencies]
+myo = [
+    "bleak>=1,<2",
+    "pyserial>=3.5,<4",
+]
+train = [
+    "onnx>=1.18,<2",
+    "pandas>=3.0.5",
+    "scikit-learn>=1.7,<2",
+    "torch>=2.8,<3",
+]
+onnx = [
+    "onnxruntime>=1.29.0 ; (platform_machine != 'AMD64' and platform_machine != 'x86_64' and sys_platform == 'linux') or (platform_machine != 'AMD64' and platform_machine != 'x86_64' and sys_platform == 'win32') or (sys_platform != 'linux' and sys_platform != 'win32')",
+    "onnxruntime-gpu>=1.29.0 ; (platform_machine == 'AMD64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')",
+    "onnxruntime-qnn>=2.4.0 ; platform_machine == 'ARM64' or platform_machine == 'aarch64'",
+]
+handi = [
+    "msgpack>=1.1,<2",
+]
+
+[project.scripts]
+qgrip = "qgrip.cli:main"
+qgrip-rpc-handi = "qgrip.handi_entry:main"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28,<1",
+    "ruff>=0.12,<1",
+    "ty>=0.0.1a16,<1",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
+explicit = true
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu132", marker = "(sys_platform == 'linux' or sys_platform == 'win32') and platform_machine != 'aarch64' and platform_machine != 'ARM64'" },
+]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.ty.src]
+include = ["src", "tests"]
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"

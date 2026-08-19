@@ -1,0 +1,30 @@
+{
+  "name": "qgrip-dashboard",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "test": "vitest run",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "latest",
+    "daisyui": "latest",
+    "svelte": "latest",
+    "tailwindcss": "latest",
+    "uplot": "latest"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "latest",
+    "@testing-library/jest-dom": "latest",
+    "@testing-library/svelte": "latest",
+    "@testing-library/user-event": "latest",
+    "@types/node": "latest",
+    "jsdom": "latest",
+    "svelte-check": "latest",
+    "typescript": "latest",
+    "vite": "latest",
+    "vitest": "latest"
+  }
+}

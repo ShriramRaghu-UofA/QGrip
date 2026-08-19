@@ -1,0 +1,2 @@
+# Minified bundles can contain intentional line-ending whitespace in string literals.
+src/qgrip/dashboard/assets/*.js -whitespace

@@ -1,2 +1,92 @@
 # QGrip
-EMG Control of the Handi Hand with Arduino Uno Q
+
+QGrip is a typed Python 3.14 application for collecting EMG data, training and
+validating gesture models, and safely controlling a Handi hand through the Arduino
+UNO Q Router. It includes an installable FastAPI/Svelte dashboard and a completely
+standalone UNO Q runtime.
+
+## Quick start
+
+```powershell
+uv sync --locked --all-extras --dev
+uv run qgrip profile create synthetic.json --device synthetic
+uv run qgrip doctor --profile synthetic.json
+uv run qgrip sgt demo --profile synthetic.json
+uv run qgrip export demo --profile synthetic.json
+uv run qgrip train demo --profile synthetic.json
+uv run qgrip web --profile synthetic.json
+```
+
+## Launching the web dashboard
+
+From a source checkout, install the locked environment and create or select a
+profile, then start the server:
+
+```powershell
+uv sync --locked --all-extras --dev
+uv run qgrip profile create synthetic.json --device synthetic
+uv run qgrip web --profile synthetic.json
+```
+
+QGrip prints a launch URL similar to:
+
+```text
+QGrip dashboard: http://127.0.0.1:8765/?token=...
+```
+
+Open the complete printed URL in a browser. The per-launch token in that URL is
+required by the dashboard API, so opening `http://127.0.0.1:8765/` without it will
+not connect. Keep the terminal running while using the dashboard and press
+`Ctrl+C` to stop it.
+
+For an installed wheel, omit `uv run`:
+
+```powershell
+qgrip web --profile C:\path\to\profile.json
+```
+
+The bind address and port come from the profile's `dashboard` section. The
+templates default to loopback access on port 8765:
+
+```json
+{
+  "dashboard": {
+    "host": "127.0.0.1",
+    "port": 8765
+  }
+}
+```
+
+The compiled dashboard is included in the Python wheel; Node and the frontend
+source tree are not required to run it. Use Node only when developing or rebuilding
+the frontend.
+
+Packaged templates for `synthetic`, `sifi`, `myo_ble`, and `myo_dongle` live in
+`src/qgrip/profile_templates`. Myo support uses the attributed PyoMyo source vendored
+from the reference acquisition repository; PyoMyo itself is not installed.
+
+## Standalone Handi
+
+```powershell
+uv run qgrip-rpc-handi --profile handi.json --model data/demo/models/RUN/model.pt --no-api
+```
+
+The standalone command owns acquisition, inference, the Unix-domain Arduino Router
+RPC connection, start pose, movement, and shutdown. An optional loopback observer API
+can be enabled in the profile. The App Lab Brick/sketch lives separately; configure
+its repository in `qgrip.handi.HANDI_BRICK_REPOSITORY_URL` when published.
+
+Every motor command is clamped to configured joint limits and sent as one
+`set_positions` Router call. Stopping QGrip commands does not disable servo torque and
+does not replace a physical emergency stop.
+
+## Gesture images
+
+QGrip does not download assets during installation, import, or capture. Run
+`qgrip assets download` explicitly with a checksum manifest. Images originate from
+[LibEMGGestures](https://github.com/LibEMG/LibEMGGestures); review its attribution,
+citation, and licensing before redistribution. Text cues remain fully usable without
+images.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [ARCHITECTURE.md](ARCHITECTURE.md) before
+changing public workflows or hardware lifecycle behavior.

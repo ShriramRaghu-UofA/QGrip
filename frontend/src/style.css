@@ -1,0 +1,23 @@
+@import 'tailwindcss';
+@import 'uplot/dist/uPlot.min.css';
+@plugin 'daisyui' {
+  themes: dracula --default, nord, light;
+}
+
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

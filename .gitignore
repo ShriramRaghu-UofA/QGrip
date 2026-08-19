@@ -206,6 +206,14 @@ tempCodeRunnerFile.py
 # Ruff stuff:
 .ruff_cache/
 
+# Frontend dependencies and local Vite/test output (compiled wheel assets are tracked)
+frontend/node_modules/
+frontend/.svelte-kit/
+frontend/.vite/
+frontend/coverage/
+frontend/test-results/
+frontend/playwright-report/
+
 # PyPI configuration file
 .pypirc
 
