@@ -13,7 +13,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from qgrip.artifacts import discover_artifacts, export_capture, latest_capture
-from qgrip.assets import download_assets
+from qgrip.assets import DEFAULT_GESTURES, GESTURE_ASSETS, LIBEMG_CITATION_URL, download_assets
 from qgrip.devices import check_device, create_device
 from qgrip.domain import SGTRequest, TrainingRequest
 from qgrip.errors import QGripError, ValidationError
@@ -46,11 +46,19 @@ def build_parser() -> argparse.ArgumentParser:
         command = profile_commands.add_parser(name)
         command.add_argument("path", type=Path)
 
-    assets = commands.add_parser("assets")
+    assets = commands.add_parser("assets", help="manage optional gesture images")
     assets_commands = assets.add_subparsers(dest="assets_command", required=True)
-    download = assets_commands.add_parser("download")
-    download.add_argument("--target", type=Path, default=Path("assets/gestures"))
-    download.add_argument("--manifest", type=Path)
+    download = assets_commands.add_parser("download", help="download LibEMG gesture images")
+    download.add_argument("--target", type=Path)
+    download.add_argument(
+        "--profile", type=Path, help="download only the gestures configured by this profile"
+    )
+    download.add_argument(
+        "--gesture",
+        action="append",
+        choices=tuple(GESTURE_ASSETS),
+        help="gesture to download; repeat to select multiple gestures",
+    )
 
     sgt = commands.add_parser("sgt", help="run screen-guided capture")
     sgt.add_argument("subject")
@@ -143,11 +151,16 @@ def dispatch(args: argparse.Namespace) -> int:
             )
         return 0
     if args.command == "assets":
-        manifest = json.loads(args.manifest.read_text(encoding="utf-8")) if args.manifest else None
-        print(
-            f"downloaded {download_assets(args.target, manifest)} asset(s) "
-            f"to {args.target.resolve()}"
+        asset_profile = load_profile(args.profile) if args.profile else None
+        target = args.target or (
+            asset_profile.assets_root if asset_profile else Path("assets/images")
         )
+        gestures = args.gesture or (
+            asset_profile.sgt.gestures if asset_profile else DEFAULT_GESTURES
+        )
+        count = download_assets(target, gestures)
+        print(f"ready: {count} gesture image(s) in {target.resolve()}")
+        print(f"LibEMGGestures requests citation; see {LIBEMG_CITATION_URL}")
         return 0
     profile = load_profile(args.profile)
     if args.command == "doctor":

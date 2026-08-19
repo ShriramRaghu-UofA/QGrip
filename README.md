@@ -100,11 +100,34 @@ does not replace a physical emergency stop.
 
 ## Gesture images
 
-QGrip does not download assets during installation, import, or capture. Run
-`qgrip assets download` explicitly with a checksum manifest. Images originate from
-[LibEMGGestures](https://github.com/LibEMG/LibEMGGestures); review its attribution,
-citation, and licensing before redistribution. Text cues remain fully usable without
-images.
+QGrip does not download assets during installation, import, or capture. Download the
+seven default gesture images (`rest`, `close`, `open`, wrist flexion/extension, pronation,
+and supination) into `assets/images` explicitly:
+
+```powershell
+uv run qgrip assets download
+```
+
+To download no more than the classes configured in a profile and place them in that
+profile's `assets_root`, run:
+
+```powershell
+uv run qgrip assets download --profile sifi.json
+```
+
+Individual classes can instead be selected by repeating `--gesture`, and `--target`
+overrides the output directory:
+
+```powershell
+uv run qgrip assets download --gesture rest --gesture open --target assets/images
+```
+
+The images are checksum-verified against pinned files from
+[LibEMGGestures](https://github.com/LibEMG/LibEMGGestures/tree/c17792f1966f23f7dafda7c47a65012e47a2e7ee).
+That project asks image users to cite its work; follow the citation instructions in its
+README and review its attribution and licensing before redistribution. QGrip writes the
+source revision, checksums, and citation reminder to `manifest.json` beside the images.
+Text cues remain fully usable without images.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [ARCHITECTURE.md](ARCHITECTURE.md) before
 changing public workflows or hardware lifecycle behavior.

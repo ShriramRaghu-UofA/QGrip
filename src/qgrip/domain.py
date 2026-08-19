@@ -24,7 +24,15 @@ class DeviceConfig:
 
 @dataclass(frozen=True, slots=True)
 class SGTConfig:
-    gestures: tuple[str, ...] = ("rest", "open", "close")
+    gestures: tuple[str, ...] = (
+        "rest",
+        "close",
+        "open",
+        "wrist_flexion",
+        "wrist_extension",
+        "pronation",
+        "supination",
+    )
     trials: int = 3
     duration_seconds: float = 4.0
     practice: bool = True

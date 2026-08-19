@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "data_root": "../../data",
-  "assets_root": "../../assets/gestures",
+  "assets_root": "../../assets/images",
   "device": {
     "kind": "sifi",
     "sample_rate_hz": 1600,
@@ -10,7 +10,7 @@
     "port": "5000"
   },
   "sgt": {
-    "gestures": ["rest", "open", "close"],
+    "gestures": ["rest", "close", "open", "wrist_flexion", "wrist_extension", "pronation", "supination"],
     "trials": 3,
     "duration_seconds": 4,
     "practice": true,

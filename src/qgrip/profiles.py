@@ -109,7 +109,18 @@ def _parse_sgt(raw: object) -> SGTConfig:
         },
         "sgt",
     )
-    gestures_raw = data.get("gestures", ["rest", "open", "close"])
+    gestures_raw = data.get(
+        "gestures",
+        [
+            "rest",
+            "close",
+            "open",
+            "wrist_flexion",
+            "wrist_extension",
+            "pronation",
+            "supination",
+        ],
+    )
     if not isinstance(gestures_raw, list):
         raise ValidationError("sgt.gestures must be a list")
     gestures = tuple(_string(item, "gesture") for item in gestures_raw)
@@ -271,7 +282,7 @@ def load_profile(path: str | Path) -> QGripProfile:
         version,
         resolved,
         _resolve(base, data.get("data_root", "data"), "data_root"),
-        _resolve(base, data.get("assets_root", "assets/gestures"), "assets_root"),
+        _resolve(base, data.get("assets_root", "assets/images"), "assets_root"),
         _parse_device(data.get("device", {})),
         _parse_sgt(data.get("sgt", {})),
         _parse_model(data.get("model", {})),
@@ -325,10 +336,18 @@ def default_profile(kind: str = "synthetic") -> dict[str, object]:
     return {
         "schema_version": 1,
         "data_root": "data",
-        "assets_root": "assets/gestures",
+        "assets_root": "assets/images",
         "device": device,
         "sgt": {
-            "gestures": ["rest", "open", "close"],
+            "gestures": [
+                "rest",
+                "close",
+                "open",
+                "wrist_flexion",
+                "wrist_extension",
+                "pronation",
+                "supination",
+            ],
             "trials": 3,
             "duration_seconds": 4,
             "practice": True,
