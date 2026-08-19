@@ -8,12 +8,13 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
-    "fastapi>=0.116,<1",
+    "fastapi>=0.141.1,<1",
     "numpy>=2.3,<3",
     "pydantic>=2.11,<3",
     "pyarrow>=25",
     "sifi-streamer @ git+https://github.com/BLINCdev/sifi-streamer.git@v0.6.4",
     "uvicorn>=0.35,<1",
+    "httpx>=0.28.1,<1",
 ]
 
 [project.optional-dependencies]
@@ -43,7 +44,6 @@ qgrip-rpc-handi = "qgrip.handi_entry:main"
 
 [dependency-groups]
 dev = [
-    "httpx>=0.28,<1",
     "ruff>=0.12,<1",
     "ty>=0.0.1a16,<1",
 ]
