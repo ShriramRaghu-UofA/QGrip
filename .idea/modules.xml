@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/QGrip.iml" filepath="$PROJECT_DIR$/.idea/QGrip.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/qgrip.iml" filepath="$PROJECT_DIR$/.idea/qgrip.iml" />
     </modules>
   </component>
 </project>
