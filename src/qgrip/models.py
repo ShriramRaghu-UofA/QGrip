@@ -18,6 +18,7 @@ from torch import nn
 from qgrip.domain import ModelName, NormalizationMode
 
 MODEL_NAMES: tuple[ModelName, ...] = tuple(ModelName)
+CHECKPOINT_VERSION = 1
 
 
 class EMGPreprocessor(nn.Module):
@@ -283,11 +284,23 @@ def create_model(model_name: ModelName | str, **config: Any) -> BaseEMGClassifie
     return MODEL_CLASSES[resolved_name](**config)
 
 
+def _validate_checkpoint_version(checkpoint: Mapping[str, Any]) -> None:
+    checkpoint_version = checkpoint.get("checkpoint_version")
+    if checkpoint_version != CHECKPOINT_VERSION:
+        raise ValueError(
+            f"checkpoint has unsupported checkpoint_version {checkpoint_version!r}; "
+            f"expected {CHECKPOINT_VERSION}"
+        )
+
+
 def load_checkpoint(path: str | Path, device: torch.device | str = "cpu") -> dict[str, Any]:
-    return cast(dict[str, Any], torch.load(path, map_location=device, weights_only=True))
+    checkpoint = cast(dict[str, Any], torch.load(path, map_location=device, weights_only=True))
+    _validate_checkpoint_version(checkpoint)
+    return checkpoint
 
 
 def checkpoint_model_config(checkpoint: Mapping[str, Any]) -> tuple[ModelName, dict[str, Any]]:
+    _validate_checkpoint_version(checkpoint)
     raw_model_name = checkpoint.get("model_name")
     try:
         model_name = ModelName(raw_model_name)

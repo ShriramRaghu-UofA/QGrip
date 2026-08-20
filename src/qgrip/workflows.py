@@ -405,7 +405,12 @@ class InferenceService:
         try:
             import torch
 
-            from qgrip.models import ONNXEMGClassifier, load_checkpoint, load_model_checkpoint
+            from qgrip.models import (
+                ONNXEMGClassifier,
+                checkpoint_model_config,
+                load_checkpoint,
+                load_model_checkpoint,
+            )
         except ImportError as exc:
             raise ArtifactError(
                 "inference requires the qgrip train extra: uv sync --extra train"
@@ -419,6 +424,7 @@ class InferenceService:
             backend = "onnx"
         try:
             self.metadata = load_checkpoint(checkpoint_path)
+            _, model_config = checkpoint_model_config(self.metadata)
         except (OSError, RuntimeError, ValueError, KeyError) as exc:
             raise ArtifactError(f"unsupported checkpoint {checkpoint_path}: {exc}") from exc
         requested_backend = backend
@@ -442,9 +448,18 @@ class InferenceService:
         elif requested_backend != "onnx":
             raise ArtifactError(f"unsupported inference backend: {backend}")
         self.backend = requested_backend
-        self.window_size = int(self.metadata["window_size"])
-        self.channels = int(self.metadata.get("n_channels", self.metadata.get("channels", 0)))
-        self.labels = tuple(str(value) for value in self.metadata["labels"])
+        self.window_size = int(model_config["window_size"])
+        self.channels = int(model_config["n_channels"])
+        labels = self.metadata.get("labels")
+        if (
+            not isinstance(labels, list)
+            or not labels
+            or not all(isinstance(label, str) for label in labels)
+        ):
+            raise ArtifactError("checkpoint labels must be a non-empty list of strings")
+        if len(labels) != int(model_config["n_classes"]):
+            raise ArtifactError("checkpoint labels do not match model_config.n_classes")
+        self.labels = tuple(labels)
         self._samples: deque[tuple[float, ...]] = deque(maxlen=self.window_size)
 
     def predict(self, samples: tuple[tuple[float, ...], ...]) -> Prediction:

@@ -89,7 +89,7 @@ class HandController:
     def jog(self, name: str, delta: float) -> float:
         if abs(delta) > self.config.step:
             raise ValidationError(f"calibration jog is limited to {self.config.step}")
-        return self.move(name, dict(self.state.positions).get(name, 0) + delta)
+        return self.move(name, dict(self.state.positions)[name] + delta)
 
     def apply_grip(self, name: str) -> None:
         grip = next((item for item in self.config.grips if item.name == name), None)
@@ -150,7 +150,7 @@ class HandiRuntime:
 
     def validate(self) -> None:
         metadata = self.model.metadata
-        if int(metadata["channels"]) != self.profile.device.channels:
+        if self.model.channels != self.profile.device.channels:
             raise ValidationError("model channel count does not match device")
         if not sample_rates_match(
             float(metadata["sample_rate_hz"]), self.profile.device.sample_rate_hz

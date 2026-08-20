@@ -29,7 +29,7 @@ from qgrip.domain import (
     TrainingSummary,
 )
 from qgrip.errors import ArtifactError
-from qgrip.models import BaseEMGClassifier, create_model, export_model_to_onnx
+from qgrip.models import CHECKPOINT_VERSION, BaseEMGClassifier, create_model, export_model_to_onnx
 
 LOGGER = logging.getLogger("qgrip.training")
 
@@ -198,12 +198,11 @@ class EMGWindowDataset(Dataset[tuple[torch.Tensor, ...]]):
             raise ArtifactError(f"{path}: missing gesture column")
         if self.include_activation and "activation_energy" not in frame:
             raise ArtifactError(f"{path}: missing activation_energy column")
-        if "sample_rate" in frame:
-            rates = set(frame["sample_rate"].dropna().astype(float))
-            if rates and (len(rates) != 1 or not math.isclose(rates.pop(), self.sample_rate_hz)):
-                raise ArtifactError(f"{path}: sample rate does not match the profile")
-        if "presentation_stop_reason" in frame:
-            frame = frame[frame["presentation_stop_reason"] == "completed"]
+        if "sample_rate_hz" not in frame:
+            raise ArtifactError(f"{path}: missing sample_rate_hz column")
+        rates = set(frame["sample_rate_hz"].dropna().astype(float))
+        if len(rates) != 1 or not math.isclose(rates.pop(), self.sample_rate_hz):
+            raise ArtifactError(f"{path}: sample rate does not match the profile")
         frame = frame[frame[label_column].isin(self.labels)]
         required = {"capture_file", "trial", "sequence", "sample_index_in_packet"}
         if missing := required.difference(frame.columns):
@@ -358,8 +357,6 @@ def _summarize_split(
 
 
 class TorchTrainingService:
-    PRESET_VERSION = 2
-
     def __init__(self, options: TrainingConfig) -> None:
         self.options = options
 
@@ -481,7 +478,7 @@ class TorchTrainingService:
             weight_decay=self.options.weight_decay,
         )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.options.epochs)
-        rest_index = dataset.label_to_index.get("rest", 0)
+        rest_index = dataset.label_to_index["rest"]
         class_loss = ActivationConditionedCrossEntropy(
             rest_index, self.options.activation_smoothing_threshold
         )
@@ -554,23 +551,13 @@ class TorchTrainingService:
         output.mkdir(parents=True, exist_ok=False)
         checkpoint_path = output / "model.pt"
         checkpoint: dict[str, Any] = {
-            "checkpoint_version": 3 if request.proportional else 1,
+            "checkpoint_version": CHECKPOINT_VERSION,
             "model_state_dict": best_state,
             "model_name": request.model.value,
             "model_config": model.model_config,
             "labels": list(dataset.labels),
-            "label_to_idx": dataset.label_to_index,
-            "window_size": window_size,
-            "n_channels": dataset.channels,
-            "channels": dataset.channels,
-            "n_classes": len(dataset.labels),
-            "n_fft": n_fft,
-            "hop_length": stft_hop_samples,
             "device": request.profile.device.kind.value,
-            "sample_rate": sample_rate,
             "sample_rate_hz": sample_rate,
-            "normalization": model.normalization.value,
-            "predict_activation": request.proportional,
             "activation_calibration": (
                 {
                     "method": activation_calibration.method,
@@ -584,7 +571,6 @@ class TorchTrainingService:
                 if activation_calibration is not None
                 else None
             ),
-            "preset_version": self.PRESET_VERSION,
             "val_loss": best_loss,
             "val_acc": best_accuracy,
             "inputs": [str(path) for path in resolved],

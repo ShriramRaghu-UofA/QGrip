@@ -47,12 +47,11 @@ class ModelTests(unittest.TestCase):
             predict_activation=False,
         )
         checkpoint = {
+            "checkpoint_version": 1,
             "model_state_dict": model.state_dict(),
             "model_name": "dense",
             "model_config": model.model_config,
             "labels": ["rest", "open", "close"],
-            "window_size": 16,
-            "n_channels": 8,
             "sample_rate_hz": 200,
         }
         with tempfile.TemporaryDirectory() as directory:
@@ -61,6 +60,15 @@ class ModelTests(unittest.TestCase):
             loaded, metadata = load_model_checkpoint(path)
             self.assertEqual(metadata["labels"], checkpoint["labels"])
             self.assertEqual(tuple(loaded(torch.zeros(1, 16, 8)).shape), (1, 3))
+
+    def test_checkpoint_version_is_required(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "model.pt"
+            for document, expected in (({}, "None"), ({"checkpoint_version": 2}, "2")):
+                with self.subTest(checkpoint_version=expected):
+                    torch.save(document, path)
+                    with self.assertRaisesRegex(ValueError, f"checkpoint_version {expected}"):
+                        load_model_checkpoint(path)
 
     def test_builtin_stft_exports_and_runs_in_onnx_runtime(self) -> None:
         model = create_model(

@@ -76,7 +76,7 @@ def _capture_header(source: Path) -> ArtifactMetadata:
         source,
         "capture",
         str(attributes["subject"]),
-        str(attributes.get("created_at", "")),
+        str(attributes["created_at"]),
         cast(Any, attributes["device"]),
         _number(attributes, "sample_rate_hz"),
         int(_number(attributes, "channels")),
@@ -179,7 +179,7 @@ def _emg_rows(packet: RawPacket, presentation: dict[str, object]) -> list[dict[s
             "sequence": packet.sequence,
             "capture_file": presentation["capture_file"],
             "device": presentation["device"],
-            "sample_rate": presentation["sample_rate"],
+            "sample_rate_hz": presentation["sample_rate_hz"],
             "sample_index_in_packet": index,
             "host_monotonic_ns": packet.host_monotonic_ns,
             "host_unix_ns": packet.host_unix_ns,
@@ -273,7 +273,7 @@ def export_capture(path: str | Path, *, activation_energy_window_seconds: float)
                     "channels": metadata.channels,
                     "capture_file": str(metadata.path),
                     "device": metadata.device,
-                    "sample_rate": metadata.sample_rate_hz,
+                    "sample_rate_hz": metadata.sample_rate_hz,
                     "rows": [],
                     "stop_reason": None,
                     "superseded": False,
@@ -283,7 +283,7 @@ def export_capture(path: str | Path, *, activation_energy_window_seconds: float)
             presentation = presentations.get(record.marker_id)
             if record.marker_kind == "presentation_superseded" and presentation is not None:
                 presentation["superseded"] = True
-            elif record.marker_kind in {"activation", "activation_target"}:
+            elif record.marker_kind == "activation_target":
                 target = presentations.get(active_presentation or "")
                 value = record.attributes.get("activation")
                 if target is not None and isinstance(value, (int, float)):

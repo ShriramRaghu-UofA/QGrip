@@ -157,7 +157,7 @@ class MyoAcquisitionDevice:
             if packet is None:
                 time.sleep(0.001)
                 continue
-            if getattr(packet, "stream_id", "") != EMG_STREAM_ID:
+            if packet.stream_id != EMG_STREAM_ID:
                 continue
             data = packet.data
             values = tuple(float(data[f"emg{index}"][0]) for index in range(8))

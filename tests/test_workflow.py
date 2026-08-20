@@ -1,3 +1,4 @@
+import json
 import tempfile
 import threading
 import time
@@ -35,6 +36,7 @@ class SyntheticWorkflowTests(unittest.TestCase):
             capture = Path(directory) / "session.capture.jsonl.zst"
             attributes = {
                 "subject": "subject",
+                "created_at": "2026-01-01T00:00:00+00:00",
                 "device": "synthetic",
                 "sample_rate_hz": 200.0,
                 "channels": 8,
@@ -73,6 +75,7 @@ class SyntheticWorkflowTests(unittest.TestCase):
             capture = Path(directory) / "session.capture.jsonl.zst"
             attributes = {
                 "subject": "subject",
+                "created_at": "2026-01-01T00:00:00+00:00",
                 "device": "synthetic",
                 "sample_rate_hz": 200.0,
                 "channels": 8,
@@ -103,6 +106,8 @@ class SyntheticWorkflowTests(unittest.TestCase):
             # Five ordered samples sweep the triangle: 0 → 0.5 → 1 → 0.5 → 0.
             self.assertEqual([round(value, 3) for value in activations], [0.0, 0.5, 1.0, 0.5, 0.0])
             self.assertEqual(table.column_names[-1], "activation_energy")
+            self.assertIn("sample_rate_hz", table.column_names)
+            self.assertNotIn("sample_rate", table.column_names)
             self.assertEqual(table.column("activation_energy").to_pylist(), [0.0] * 5)
             self.assertEqual(
                 table.schema.metadata[b"qgrip.activation_energy.window_samples"], b"20"
@@ -130,6 +135,14 @@ class SyntheticWorkflowTests(unittest.TestCase):
             checkpoint = TrainingService().train(
                 TrainingRequest("subject-1", profile, (), ModelName.DENSE, True), threading.Event()
             )
+            model_metadata = json.loads(
+                (checkpoint.parent / "metadata.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(model_metadata["checkpoint_version"], 1)
+            self.assertNotIn("n_channels", model_metadata)
+            self.assertNotIn("channels", model_metadata)
+            self.assertNotIn("sample_rate", model_metadata)
+            self.assertEqual(model_metadata["model_config"]["n_channels"], 8)
             prediction = InferenceService(checkpoint).predict(
                 tuple(tuple(0.0 for _ in range(8)) for _ in range(4))
             )
