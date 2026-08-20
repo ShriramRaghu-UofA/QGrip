@@ -175,7 +175,14 @@ def dispatch(args: argparse.Namespace) -> int:
     elif args.command == "export":
         captures = args.captures or [latest_capture(profile, args.subject)]
         for capture in captures:
-            print(export_capture(capture))
+            print(
+                export_capture(
+                    capture,
+                    activation_energy_window_seconds=(
+                        profile.training.activation_energy_window_seconds
+                    ),
+                )
+            )
     elif args.command == "train":
         request = TrainingRequest(
             args.subject,

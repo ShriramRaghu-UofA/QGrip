@@ -200,7 +200,7 @@ def create_app(
 
     @app.post("/api/v1/export/start", dependencies=protected)
     def start_export(body: ExportWire) -> dict[str, object]:
-        return asdict(owner.start_export(Path(body.capture).resolve()))
+        return asdict(owner.start_export(Path(body.capture).resolve(), current))
 
     @app.post("/api/v1/training/start", dependencies=protected)
     def start_training(body: TrainingWire) -> dict[str, object]:

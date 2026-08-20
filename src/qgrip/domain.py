@@ -140,6 +140,9 @@ class TrainingConfig:
     dataset_stride_seconds: float = 0.005
     stft_n_fft: int | None = None
     stft_hop_samples: int | None = None
+    activation_energy_window_seconds: float = 0.1
+    activation_reference_quantile: float = 0.9
+    activation_smoothing_threshold: float = 0.25
     activation_loss_weight: float = 1.0
     weight_decay: float = 1e-4
     normalization: NormalizationMode = NormalizationMode.DATASET_STANDARDIZE

@@ -379,8 +379,6 @@ def _stimulus_image(profile: QGripProfile, gesture: str) -> str | None:
 class TrainingService:
     """Lazy facade keeping Torch optional until training is requested."""
 
-    PRESET_VERSION = 1
-
     def train(
         self,
         request: TrainingRequest,
@@ -589,8 +587,18 @@ class WorkflowCoordinator:
         if gate is not None:
             gate.send(command)
 
-    def start_export(self, path: Path) -> JobStatus:
-        return self._begin("export", lambda: str(export_capture(path)))
+    def start_export(self, path: Path, profile: QGripProfile) -> JobStatus:
+        return self._begin(
+            "export",
+            lambda: str(
+                export_capture(
+                    path,
+                    activation_energy_window_seconds=(
+                        profile.training.activation_energy_window_seconds
+                    ),
+                )
+            ),
+        )
 
     def start_training(self, request: TrainingRequest) -> JobStatus:
         metrics: list[EpochMetric] = []

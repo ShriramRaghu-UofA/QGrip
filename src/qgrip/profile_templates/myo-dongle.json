@@ -21,7 +21,7 @@
     "epochs": 30, "batch_size": 128, "learning_rate": 0.0001,
     "validation_fraction": 0.2, "training_window_seconds": 1.0,
     "dataset_stride_seconds": 0.005, "stft_n_fft": null,
-    "stft_hop_samples": null, "activation_loss_weight": 1.0, "weight_decay": 0.0001, "normalization": "signed_8bit",
+    "stft_hop_samples": null, "activation_energy_window_seconds": 0.1, "activation_reference_quantile": 0.9, "activation_smoothing_threshold": 0.25, "activation_loss_weight": 1.0, "weight_decay": 0.0001, "normalization": "signed_8bit",
     "seed": 42, "export_onnx": true
   },
   "inference": {

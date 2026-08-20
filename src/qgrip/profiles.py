@@ -238,6 +238,8 @@ def _parse_sgt(raw: object) -> SGTConfig:
     gestures = tuple(_string(item, "gesture") for item in gestures_raw)
     if len(gestures) < 2 or len(set(gestures)) != len(gestures):
         raise ValidationError("sgt.gestures must contain at least two unique names")
+    if "rest" not in gestures:
+        raise ValidationError("sgt.gestures must include rest")
     preparation_seconds = _finite(data.get("preparation_seconds", 3), "sgt.preparation_seconds")
     if preparation_seconds < 0:
         raise ValidationError("sgt.preparation_seconds must be non-negative")
@@ -296,6 +298,9 @@ def _parse_training(raw: object, device: DeviceConfig) -> TrainingConfig:
             "dataset_stride_seconds",
             "stft_n_fft",
             "stft_hop_samples",
+            "activation_energy_window_seconds",
+            "activation_reference_quantile",
+            "activation_smoothing_threshold",
             "activation_loss_weight",
             "weight_decay",
             "normalization",
@@ -317,6 +322,35 @@ def _parse_training(raw: object, device: DeviceConfig) -> TrainingConfig:
         raise ValidationError(
             "training.stft_hop_samples must be no larger than training.stft_n_fft"
         )
+    activation_reference_quantile = _finite(
+        data.get("activation_reference_quantile", 0.9),
+        "training.activation_reference_quantile",
+        positive=True,
+    )
+    if activation_reference_quantile >= 1:
+        raise ValidationError("training.activation_reference_quantile must be less than 1")
+    activation_smoothing_threshold = _finite(
+        data.get("activation_smoothing_threshold", 0.25),
+        "training.activation_smoothing_threshold",
+        positive=True,
+    )
+    if activation_smoothing_threshold > 1:
+        raise ValidationError("training.activation_smoothing_threshold must be at most 1")
+    training_window_seconds = _finite(
+        data.get("training_window_seconds", 1.0),
+        "training.training_window_seconds",
+        positive=True,
+    )
+    activation_energy_window_seconds = _finite(
+        data.get("activation_energy_window_seconds", 0.1),
+        "training.activation_energy_window_seconds",
+        positive=True,
+    )
+    if activation_energy_window_seconds > training_window_seconds:
+        raise ValidationError(
+            "training.activation_energy_window_seconds must be no larger than "
+            "training.training_window_seconds"
+        )
     return TrainingConfig(
         epochs=_integer(data.get("epochs", 30), "training.epochs", minimum=1),
         batch_size=_integer(data.get("batch_size", 128), "training.batch_size", minimum=1),
@@ -324,11 +358,7 @@ def _parse_training(raw: object, device: DeviceConfig) -> TrainingConfig:
             data.get("learning_rate", 1e-4), "training.learning_rate", positive=True
         ),
         validation_fraction=validation_fraction,
-        training_window_seconds=_finite(
-            data.get("training_window_seconds", 1.0),
-            "training.training_window_seconds",
-            positive=True,
-        ),
+        training_window_seconds=training_window_seconds,
         dataset_stride_seconds=_finite(
             data.get("dataset_stride_seconds", 0.005),
             "training.dataset_stride_seconds",
@@ -336,6 +366,9 @@ def _parse_training(raw: object, device: DeviceConfig) -> TrainingConfig:
         ),
         stft_n_fft=n_fft,
         stft_hop_samples=hop_samples,
+        activation_energy_window_seconds=activation_energy_window_seconds,
+        activation_reference_quantile=activation_reference_quantile,
+        activation_smoothing_threshold=activation_smoothing_threshold,
         activation_loss_weight=_finite(
             data.get("activation_loss_weight", 1.0),
             "training.activation_loss_weight",
@@ -616,6 +649,9 @@ def default_profile(kind: DeviceKind | str = DeviceKind.SYNTHETIC) -> dict[str, 
             "dataset_stride_seconds": 0.005,
             "stft_n_fft": None,
             "stft_hop_samples": None,
+            "activation_energy_window_seconds": 0.1,
+            "activation_reference_quantile": 0.9,
+            "activation_smoothing_threshold": 0.25,
             "activation_loss_weight": 1.0,
             "weight_decay": 1e-4,
             "normalization": (

@@ -6,15 +6,18 @@ import json
 import logging
 import math
 from collections.abc import Callable, Sized
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 import torch
 from sklearn.model_selection import GroupShuffleSplit, train_test_split
 from torch import nn
+from torch.nn import functional as F
 from torch.utils.data import DataLoader, Dataset, Subset
 
 from qgrip.artifacts import export_capture, latest_capture, parquet_path, subject_root
@@ -31,6 +34,107 @@ from qgrip.models import BaseEMGClassifier, create_model, export_model_to_onnx
 LOGGER = logging.getLogger("qgrip.training")
 
 
+@dataclass(frozen=True, slots=True)
+class ActivationCalibration:
+    """Training-only energy references used to derive proportional targets."""
+
+    method: str
+    window_samples: int
+    rest_floor: float
+    reference_quantile: float
+    class_references: tuple[tuple[str, float], ...]
+
+
+def _fit_activation_calibration(
+    labels: tuple[str, ...],
+    targets: list[int],
+    energies: list[float],
+    train_indices: list[int],
+    *,
+    window_samples: int,
+    reference_quantile: float,
+) -> tuple[ActivationCalibration, list[float]]:
+    """Fit energy scaling on training indices, then transform the complete dataset."""
+    if "rest" not in labels:
+        raise ArtifactError("proportional activation estimation requires a rest class")
+    rest_index = labels.index("rest")
+    rest_energies = [energies[index] for index in train_indices if targets[index] == rest_index]
+    if not rest_energies:
+        raise ArtifactError("training split has no rest windows for activation calibration")
+    rest_floor = float(np.median(rest_energies))
+    references: dict[str, float] = {}
+    for class_index, label in enumerate(labels):
+        if class_index == rest_index:
+            continue
+        class_energies = [
+            energies[index] for index in train_indices if targets[index] == class_index
+        ]
+        if not class_energies:
+            raise ArtifactError(f"training split has no {label} windows for activation calibration")
+        reference = float(np.quantile(class_energies, reference_quantile))
+        if reference <= rest_floor:
+            raise ArtifactError(
+                f"{label} energy reference {reference:.6g} does not exceed "
+                f"the rest floor {rest_floor:.6g}"
+            )
+        references[label] = reference
+
+    activations: list[float] = []
+    for target, energy in zip(targets, energies, strict=True):
+        label = labels[target]
+        if label == "rest":
+            activations.append(0.0)
+            continue
+        reference = references[label]
+        activations.append(float(np.clip((energy - rest_floor) / (reference - rest_floor), 0, 1)))
+    calibration = ActivationCalibration(
+        method="causal_rms",
+        window_samples=window_samples,
+        rest_floor=rest_floor,
+        reference_quantile=reference_quantile,
+        class_references=tuple(references.items()),
+    )
+    return calibration, activations
+
+
+class ActivationConditionedCrossEntropy(nn.Module):
+    """Interpolate only between rest and the prompted gesture near zero activation."""
+
+    def __init__(self, rest_index: int, smoothing_threshold: float) -> None:
+        super().__init__()
+        self.rest_index = rest_index
+        self.smoothing_threshold = smoothing_threshold
+
+    def targets(
+        self, labels: torch.Tensor, activations: torch.Tensor, n_classes: int
+    ) -> torch.Tensor:
+        target = F.one_hot(labels, num_classes=n_classes).to(dtype=activations.dtype)
+        active = labels != self.rest_index
+        mix = torch.clamp(activations / self.smoothing_threshold, 0, 1)
+        target[active, self.rest_index] = 1 - mix[active]
+        target[active, labels[active]] = mix[active]
+        return target
+
+    def forward(
+        self,
+        logits: torch.Tensor,
+        labels: torch.Tensor,
+        activations: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        if activations is None:
+            return F.cross_entropy(logits, labels)
+        targets = self.targets(labels, activations, logits.shape[1])
+        return -(targets * F.log_softmax(logits, dim=1)).sum(dim=1).mean()
+
+    def accuracy_targets(
+        self, labels: torch.Tensor, activations: torch.Tensor | None, n_classes: int
+    ) -> torch.Tensor:
+        if activations is None:
+            return labels
+        targets = self.targets(labels, activations, n_classes)
+        return targets.argmax(dim=1)
+
+
 class EMGWindowDataset(Dataset[tuple[torch.Tensor, ...]]):
     """Read canonical QGrip Parquet sessions into grouped EMG windows."""
 
@@ -44,6 +148,7 @@ class EMGWindowDataset(Dataset[tuple[torch.Tensor, ...]]):
         channels: int,
         sample_rate_hz: float,
         include_activation: bool,
+        activation_window_size: int,
     ) -> None:
         self.labels = labels
         self.label_to_index = {label: index for index, label in enumerate(labels)}
@@ -51,9 +156,11 @@ class EMGWindowDataset(Dataset[tuple[torch.Tensor, ...]]):
         self.windows: list[np.ndarray] = []
         self.targets: list[int] = []
         self.activations: list[float] = []
+        self.energies: list[float] = []
         self.groups: list[str] = []
         self.sample_rate_hz = sample_rate_hz
         self.channels = channels
+        self.activation_window_size = activation_window_size
         for path in session_files:
             self._read_session(path, window_size, stride)
         if not self.windows:
@@ -67,6 +174,21 @@ class EMGWindowDataset(Dataset[tuple[torch.Tensor, ...]]):
             raise ArtifactError(f"training data has no usable windows for classes: {missing}")
 
     def _read_session(self, path: Path, window_size: int, stride: int) -> None:
+        if self.include_activation:
+            metadata = pq.read_schema(path).metadata or {}
+            method = metadata.get(b"qgrip.activation_energy.method")
+            samples = metadata.get(b"qgrip.activation_energy.window_samples")
+            if method != b"causal_rms" or samples is None:
+                raise ArtifactError(f"{path}: missing causal RMS activation-energy metadata")
+            try:
+                stored_window_size = int(samples)
+            except ValueError as exc:
+                raise ArtifactError(f"{path}: invalid activation-energy window metadata") from exc
+            if stored_window_size != self.activation_window_size:
+                raise ArtifactError(
+                    f"{path}: activation-energy window has {stored_window_size} samples; "
+                    f"profile requires {self.activation_window_size}"
+                )
         frame = pd.read_parquet(path)
         label_column = "gesture"
         channel_columns = [f"channel_{index}" for index in range(self.channels)]
@@ -74,6 +196,8 @@ class EMGWindowDataset(Dataset[tuple[torch.Tensor, ...]]):
             raise ArtifactError(f"{path}: missing {self.channels} QGrip channel columns")
         if label_column not in frame:
             raise ArtifactError(f"{path}: missing gesture column")
+        if self.include_activation and "activation_energy" not in frame:
+            raise ArtifactError(f"{path}: missing activation_energy column")
         if "sample_rate" in frame:
             rates = set(frame["sample_rate"].dropna().astype(float))
             if rates and (len(rates) != 1 or not math.isclose(rates.pop(), self.sample_rate_hz)):
@@ -98,24 +222,17 @@ class EMGWindowDataset(Dataset[tuple[torch.Tensor, ...]]):
                 window = values[start : start + window_size]
                 if not np.isfinite(window).all():
                     continue
-                activation = 1.0
-                if self.include_activation:
-                    activation_column = next(
-                        (
-                            name
-                            for name in ("activation_measured", "activation", "activation_target")
-                            if name in trial
-                        ),
-                        None,
-                    )
-                    if activation_column is None:
-                        raise ArtifactError(f"{path}: proportional data has no activation column")
-                    activation = float(trial.iloc[start + window_size - 1][activation_column])
-                    if not math.isfinite(activation):
-                        continue
                 self.windows.append(window)
                 self.targets.append(self.label_to_index[label])
-                self.activations.append(float(np.clip(activation, 0, 1)))
+                self.activations.append(1.0)
+                if self.include_activation:
+                    energy = float(trial.iloc[start + window_size - 1]["activation_energy"])
+                    if not math.isfinite(energy):
+                        self.windows.pop()
+                        self.targets.pop()
+                        self.activations.pop()
+                        continue
+                    self.energies.append(energy)
                 self.groups.append(group)
 
     def __len__(self) -> int:
@@ -134,7 +251,7 @@ def _train_epoch(
     model: BaseEMGClassifier,
     loader: DataLoader[tuple[torch.Tensor, ...]],
     optimizer: torch.optim.Optimizer,
-    class_loss: nn.Module,
+    class_loss: ActivationConditionedCrossEntropy,
     activation_loss: nn.Module | None,
     activation_weight: float,
     device: torch.device,
@@ -148,15 +265,18 @@ def _train_epoch(
         optimizer.zero_grad(set_to_none=True)
         output = model(values)
         logits = output[0] if isinstance(output, tuple) else output
-        loss = class_loss(logits, labels)
+        targets = batch[2].to(device) if activation_loss is not None else None
+        loss = class_loss(logits, labels, targets)
         if activation_loss is not None:
             if not isinstance(output, tuple):
                 raise RuntimeError("proportional model did not return activation")
-            loss = loss + activation_weight * activation_loss(output[1], batch[2].to(device))
+            assert targets is not None
+            loss = loss + activation_weight * activation_loss(output[1], targets)
         loss.backward()
         optimizer.step()
         total += float(loss.item()) * values.shape[0]
-        correct += int((logits.argmax(dim=1) == labels).sum().item())
+        accuracy_targets = class_loss.accuracy_targets(labels, targets, logits.shape[1])
+        correct += int((logits.argmax(dim=1) == accuracy_targets).sum().item())
     if not isinstance(loader.dataset, Sized):
         raise TypeError("training dataset must have a finite size")
     count = len(loader.dataset)
@@ -167,7 +287,7 @@ def _train_epoch(
 def _evaluate(
     model: BaseEMGClassifier,
     loader: DataLoader[tuple[torch.Tensor, ...]],
-    class_loss: nn.Module,
+    class_loss: ActivationConditionedCrossEntropy,
     activation_loss: nn.Module | None,
     activation_weight: float,
     device: torch.device,
@@ -175,6 +295,7 @@ def _evaluate(
     model.eval()
     total = 0.0
     correct = 0
+    prompted_correct = 0
     predicted_activation: list[torch.Tensor] = []
     target_activation: list[torch.Tensor] = []
     for batch in loader:
@@ -182,20 +303,25 @@ def _evaluate(
         values, labels = values.to(device), labels.to(device)
         output = model(values)
         logits = output[0] if isinstance(output, tuple) else output
-        loss = class_loss(logits, labels)
+        targets = batch[2].to(device) if activation_loss is not None else None
+        loss = class_loss(logits, labels, targets)
         if activation_loss is not None:
             if not isinstance(output, tuple):
                 raise RuntimeError("proportional model did not return activation")
-            targets = batch[2].to(device)
+            assert targets is not None
             loss = loss + activation_weight * activation_loss(output[1], targets)
             predicted_activation.append(output[1].cpu())
             target_activation.append(targets.cpu())
         total += float(loss.item()) * values.shape[0]
-        correct += int((logits.argmax(dim=1) == labels).sum().item())
+        predicted_classes = logits.argmax(dim=1)
+        accuracy_targets = class_loss.accuracy_targets(labels, targets, logits.shape[1])
+        correct += int((predicted_classes == accuracy_targets).sum().item())
+        prompted_correct += int((predicted_classes == labels).sum().item())
     if not isinstance(loader.dataset, Sized):
         raise TypeError("validation dataset must have a finite size")
     count = len(loader.dataset)
     extra: dict[str, float] = {}
+    extra["prompted_gesture_accuracy"] = prompted_correct / count
     if predicted_activation:
         predicted = torch.cat(predicted_activation).numpy()
         target = torch.cat(target_activation).numpy()
@@ -232,7 +358,7 @@ def _summarize_split(
 
 
 class TorchTrainingService:
-    PRESET_VERSION = 1
+    PRESET_VERSION = 2
 
     def __init__(self, options: TrainingConfig) -> None:
         self.options = options
@@ -250,13 +376,25 @@ class TorchTrainingService:
             path = source.resolve()
             if path.name.endswith(".capture.jsonl.zst"):
                 derived = parquet_path(path)
-                path = derived if derived.exists() else export_capture(path)
+                path = (
+                    derived
+                    if derived.exists()
+                    else export_capture(
+                        path,
+                        activation_energy_window_seconds=(
+                            self.options.activation_energy_window_seconds
+                        ),
+                    )
+                )
             if path.suffix != ".parquet" or not path.is_file():
                 raise ArtifactError(f"training input is not Parquet: {path}")
             resolved.append(path)
         sample_rate = request.profile.device.sample_rate_hz
         window_size = max(8, round(sample_rate * self.options.training_window_seconds))
         dataset_stride = max(1, round(sample_rate * self.options.dataset_stride_seconds))
+        activation_window_size = max(
+            1, round(sample_rate * self.options.activation_energy_window_seconds)
+        )
         n_fft_limit = 64 if sample_rate >= 400 else 32
         default_n_fft = 2 ** math.floor(math.log2(min(n_fft_limit, window_size)))
         n_fft = self.options.stft_n_fft or max(4, default_n_fft)
@@ -275,8 +413,19 @@ class TorchTrainingService:
             channels=request.profile.device.channels,
             sample_rate_hz=sample_rate,
             include_activation=request.proportional,
+            activation_window_size=activation_window_size,
         )
         train_indices, validation_indices = self._split(dataset)
+        activation_calibration: ActivationCalibration | None = None
+        if request.proportional:
+            activation_calibration, dataset.activations = _fit_activation_calibration(
+                dataset.labels,
+                dataset.targets,
+                dataset.energies,
+                train_indices,
+                window_samples=activation_window_size,
+                reference_quantile=self.options.activation_reference_quantile,
+            )
         train_dataset = Subset(dataset, train_indices)
         validation_dataset = Subset(dataset, validation_indices)
         dataset_summary = _summarize_split(
@@ -332,7 +481,10 @@ class TorchTrainingService:
             weight_decay=self.options.weight_decay,
         )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.options.epochs)
-        class_loss = nn.CrossEntropyLoss()
+        rest_index = dataset.label_to_index.get("rest", 0)
+        class_loss = ActivationConditionedCrossEntropy(
+            rest_index, self.options.activation_smoothing_threshold
+        )
         activation_loss = nn.SmoothL1Loss() if request.proportional else None
         best_loss = float("inf")
         best_accuracy = 0.0
@@ -402,7 +554,7 @@ class TorchTrainingService:
         output.mkdir(parents=True, exist_ok=False)
         checkpoint_path = output / "model.pt"
         checkpoint: dict[str, Any] = {
-            "checkpoint_version": 2 if request.proportional else 1,
+            "checkpoint_version": 3 if request.proportional else 1,
             "model_state_dict": best_state,
             "model_name": request.model.value,
             "model_config": model.model_config,
@@ -419,6 +571,19 @@ class TorchTrainingService:
             "sample_rate_hz": sample_rate,
             "normalization": model.normalization.value,
             "predict_activation": request.proportional,
+            "activation_calibration": (
+                {
+                    "method": activation_calibration.method,
+                    "window_seconds": self.options.activation_energy_window_seconds,
+                    "window_samples": activation_calibration.window_samples,
+                    "rest_floor": activation_calibration.rest_floor,
+                    "reference_quantile": activation_calibration.reference_quantile,
+                    "class_references": dict(activation_calibration.class_references),
+                    "smoothing_threshold": self.options.activation_smoothing_threshold,
+                }
+                if activation_calibration is not None
+                else None
+            ),
             "preset_version": self.PRESET_VERSION,
             "val_loss": best_loss,
             "val_acc": best_accuracy,

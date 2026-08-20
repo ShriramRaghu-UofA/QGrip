@@ -267,6 +267,9 @@ rate.
     "dataset_stride_seconds": 0.005,
     "stft_n_fft": null,
     "stft_hop_samples": null,
+    "activation_energy_window_seconds": 0.1,
+    "activation_reference_quantile": 0.9,
+    "activation_smoothing_threshold": 0.25,
     "activation_loss_weight": 1.0,
     "weight_decay": 0.0001,
     "normalization": "dataset_standardize",
@@ -283,6 +286,18 @@ the latter fits statistics from the training split for proportional and discrete
 Profile validation
 rejects unknown keys and invalid ranges before capture, training, inference, or Handi
 control begins.
+
+Every exported Parquet row contains `activation_energy`, a causal, channel-demeaned RMS
+value over the trailing `activation_energy_window_seconds`; the same method and effective
+sample count are stored in Parquet schema metadata. Proportional training uses the energy
+on the final row of each model window. After trials are split, the rest median and each gesture's
+`activation_reference_quantile` are fitted from training trials only and then applied
+to both splits. This avoids leaking validation signal statistics. Rest is fixed at zero,
+and gesture activation is clipped between the rest floor and its class reference.
+Below `activation_smoothing_threshold`, the classification target moves linearly from
+rest to the prompted gesture; unrelated gestures receive no target probability. The
+prompted `activation` remains in the derived Parquet data for comparison, and fitted
+energy references are recorded in model metadata.
 
 `acquisition` is the shared `sifi-streamer` policy: shared-buffer duration, worker
 acknowledgement timeout, capture flush/compression/durability behavior, and nested

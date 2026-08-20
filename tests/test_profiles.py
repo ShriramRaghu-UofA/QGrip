@@ -31,6 +31,9 @@ class ProfileTests(unittest.TestCase):
             profile = load_profile(write_profile(Path(directory)))
             self.assertEqual(profile.training.dataset_stride_seconds, 0.005)
             self.assertEqual(profile.training.training_window_seconds, 0.05)
+            self.assertEqual(profile.training.activation_energy_window_seconds, 0.05)
+            self.assertEqual(profile.training.activation_reference_quantile, 0.9)
+            self.assertEqual(profile.training.activation_smoothing_threshold, 0.25)
             self.assertEqual(profile.training.epochs, 1)
 
     def test_nested_acquisition_and_model_configuration_is_loaded(self) -> None:
@@ -73,6 +76,27 @@ class ProfileTests(unittest.TestCase):
             with self.assertRaises(ValidationError):
                 load_profile(path)
 
+    def test_activation_training_ranges_are_validated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_profile(Path(directory))
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["training"]["activation_reference_quantile"] = 1
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaisesRegex(ValidationError, "reference_quantile"):
+                load_profile(path)
+
+            document["training"]["activation_reference_quantile"] = 0.9
+            document["training"]["activation_smoothing_threshold"] = 1.1
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaisesRegex(ValidationError, "smoothing_threshold"):
+                load_profile(path)
+
+            document["training"]["activation_smoothing_threshold"] = 0.25
+            document["training"]["activation_energy_window_seconds"] = 0.06
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaisesRegex(ValidationError, "energy_window_seconds"):
+                load_profile(path)
+
     def test_incompatible_myo_options_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = write_profile(Path(directory))
@@ -80,4 +104,13 @@ class ProfileTests(unittest.TestCase):
             document["device"] = {"kind": "myo_ble", "port": "COM4"}
             path.write_text(json.dumps(document), encoding="utf-8")
             with self.assertRaisesRegex(ValidationError, "cannot define"):
+                load_profile(path)
+
+    def test_rest_gesture_is_required(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_profile(Path(directory))
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["sgt"]["gestures"] = ["open", "close"]
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaisesRegex(ValidationError, "include rest"):
                 load_profile(path)

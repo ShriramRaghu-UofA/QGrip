@@ -64,7 +64,7 @@ class SyntheticWorkflowTests(unittest.TestCase):
                 writer.append_packet(packet)
                 writer.stop_segment("presentation-002", "completed")
                 writer.stop_segment("trial-001", "completed")
-            table = pq.read_table(export_capture(capture))
+            table = pq.read_table(export_capture(capture, activation_energy_window_seconds=0.1))
             self.assertEqual(table.num_rows, 1)
             self.assertEqual(table.column("gesture")[0].as_py(), "close")
 
@@ -98,11 +98,14 @@ class SyntheticWorkflowTests(unittest.TestCase):
                     writer.append_packet(packet(float(index)))
                 writer.stop_segment("presentation-001", "completed")
                 writer.stop_segment("trial-001", "completed")
-            table = pq.read_table(export_capture(capture))
+            table = pq.read_table(export_capture(capture, activation_energy_window_seconds=0.1))
             activations = table.column("activation").to_pylist()
             # Five ordered samples sweep the triangle: 0 → 0.5 → 1 → 0.5 → 0.
+            self.assertEqual([round(value, 3) for value in activations], [0.0, 0.5, 1.0, 0.5, 0.0])
+            self.assertEqual(table.column_names[-1], "activation_energy")
+            self.assertEqual(table.column("activation_energy").to_pylist(), [0.0] * 5)
             self.assertEqual(
-                [round(value, 3) for value in activations], [0.0, 0.5, 1.0, 0.5, 0.0]
+                table.schema.metadata[b"qgrip.activation_energy.window_samples"], b"20"
             )
 
     def test_capture_export_train_and_infer(self) -> None:
@@ -116,7 +119,14 @@ class SyntheticWorkflowTests(unittest.TestCase):
             self.assertTrue(capture.name.endswith(".capture.jsonl.zst"))
             self.assertIn("capture_started", {row["record_type"] for row in rows})
             self.assertIn("segment_started", {row["record_type"] for row in rows})
-            self.assertTrue(export_capture(capture).is_file())
+            self.assertTrue(
+                export_capture(
+                    capture,
+                    activation_energy_window_seconds=(
+                        profile.training.activation_energy_window_seconds
+                    ),
+                ).is_file()
+            )
             checkpoint = TrainingService().train(
                 TrainingRequest("subject-1", profile, (), ModelName.DENSE, True), threading.Event()
             )
@@ -147,7 +157,20 @@ class SyntheticWorkflowTests(unittest.TestCase):
             profile = load_profile(write_profile(Path(directory)))
             capture = SGTService().run(SGTRequest("s", profile, False), threading.Event())
             checkpoint = TrainingService().train(
-                TrainingRequest("s", profile, (export_capture(capture),), ModelName.DENSE, False),
+                TrainingRequest(
+                    "s",
+                    profile,
+                    (
+                        export_capture(
+                            capture,
+                            activation_energy_window_seconds=(
+                                profile.training.activation_energy_window_seconds
+                            ),
+                        ),
+                    ),
+                    ModelName.DENSE,
+                    False,
+                ),
                 threading.Event(),
             )
             prediction = InferenceService(checkpoint).predict(
@@ -271,5 +294,5 @@ class SyntheticWorkflowTests(unittest.TestCase):
             self.assertTrue(any(item.awaiting_command for item in events))
             self.assertTrue(repeated["done"])
             # A repeated take is superseded, so the export still projects clean rows.
-            table = pq.read_table(export_capture(capture))
+            table = pq.read_table(export_capture(capture, activation_energy_window_seconds=0.1))
             self.assertGreater(table.num_rows, 0)

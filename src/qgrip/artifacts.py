@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Iterator
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 from sifi_streamer.capture import (
@@ -209,7 +211,29 @@ def _assign_activation_labels(
         row["activation"] = activation_target(gesture, fraction)
 
 
-def export_capture(path: str | Path) -> Path:
+def _assign_activation_energy(
+    rows: list[dict[str, object]], channels: int, window_samples: int
+) -> None:
+    """Add causal, channel-demeaned RMS energy to every presentation sample."""
+    values = np.asarray(
+        [
+            [float(cast(float, row[f"channel_{channel}"])) for channel in range(channels)]
+            for row in rows
+        ],
+        dtype=np.float64,
+    )
+    sums = np.vstack((np.zeros((1, channels)), np.cumsum(values, axis=0)))
+    squared_sums = np.vstack((np.zeros((1, channels)), np.cumsum(np.square(values), axis=0)))
+    for end, row in enumerate(rows, start=1):
+        start = max(0, end - window_samples)
+        count = end - start
+        means = (sums[end] - sums[start]) / count
+        mean_squares = (squared_sums[end] - squared_sums[start]) / count
+        channel_variances = np.maximum(mean_squares - np.square(means), 0)
+        row["activation_energy"] = float(np.sqrt(np.mean(channel_variances)))
+
+
+def export_capture(path: str | Path, *, activation_energy_window_seconds: float) -> Path:
     """Project accepted QGrip SGT presentations from a generic capture log.
 
     ``trial``, ``presentation``, practice/calibration stages, activation, and
@@ -217,6 +241,8 @@ def export_capture(path: str | Path) -> Path:
     sifi-streamer, whose job is to preserve the packets and generic boundaries.
     """
     source = Path(path).resolve()
+    if not math.isfinite(activation_energy_window_seconds) or activation_energy_window_seconds <= 0:
+        raise ArtifactError("activation energy window must be finite and positive")
     try:
         metadata = _capture_header(source)
     except (OSError, ValueError, KeyError, StopIteration, TypeError) as exc:
@@ -278,16 +304,31 @@ def export_capture(path: str | Path) -> Path:
     if not complete:
         raise ArtifactError(f"capture did not close cleanly: {metadata.path}")
     accepted: list[dict[str, object]] = []
+    energy_window_samples = max(
+        1, round(metadata.sample_rate_hz * activation_energy_window_seconds)
+    )
     for presentation in presentations.values():
         if presentation["stop_reason"] != "completed" or presentation["superseded"]:
             continue
         rows = cast(list[dict[str, object]], presentation["rows"])
         _assign_activation_labels(rows, str(presentation["gesture"]), metadata.proportional)
+        _assign_activation_energy(rows, metadata.channels, energy_window_samples)
         accepted.extend(rows)
     if not accepted:
         raise ArtifactError(f"capture has no accepted EMG rows: {metadata.path}")
     temporary = output.with_suffix(".parquet.tmp")
-    pq.write_table(pa.Table.from_pylist(accepted), temporary)
+    table = pa.Table.from_pylist(accepted)
+    table = table.replace_schema_metadata(
+        {
+            **(table.schema.metadata or {}),
+            b"qgrip.activation_energy.method": b"causal_rms",
+            b"qgrip.activation_energy.window_seconds": str(
+                activation_energy_window_seconds
+            ).encode(),
+            b"qgrip.activation_energy.window_samples": str(energy_window_samples).encode(),
+        }
+    )
+    pq.write_table(table, temporary)
     temporary.replace(output)
     return output
 
