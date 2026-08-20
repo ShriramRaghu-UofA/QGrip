@@ -214,6 +214,7 @@ def _parse_sgt(raw: object) -> SGTConfig:
             "gestures",
             "trials",
             "duration_seconds",
+            "preparation_seconds",
             "practice",
             "proportional",
             "activation_calibration",
@@ -238,12 +239,16 @@ def _parse_sgt(raw: object) -> SGTConfig:
     gestures = tuple(_string(item, "gesture") for item in gestures_raw)
     if len(gestures) < 2 or len(set(gestures)) != len(gestures):
         raise ValidationError("sgt.gestures must contain at least two unique names")
+    preparation_seconds = _finite(data.get("preparation_seconds", 3), "sgt.preparation_seconds")
+    if preparation_seconds < 0:
+        raise ValidationError("sgt.preparation_seconds must be non-negative")
     return SGTConfig(
         gestures=gestures,
         trials=_integer(data.get("trials", 3), "sgt.trials", minimum=1),
         duration_seconds=_finite(
             data.get("duration_seconds", 4), "sgt.duration_seconds", positive=True
         ),
+        preparation_seconds=preparation_seconds,
         practice=_boolean(data.get("practice", True), "sgt.practice"),
         proportional=_boolean(data.get("proportional", True), "sgt.proportional"),
         activation_calibration=_boolean(
@@ -600,6 +605,7 @@ def default_profile(kind: DeviceKind | str = DeviceKind.SYNTHETIC) -> dict[str, 
             ],
             "trials": 3,
             "duration_seconds": 4,
+            "preparation_seconds": 3,
             "practice": True,
             "proportional": True,
             "activation_calibration": True,

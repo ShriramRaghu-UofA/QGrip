@@ -110,6 +110,39 @@ class SGTService:
                 recorded_presentation = 0
                 paused = False
 
+                def run_preparation(gesture: str) -> None:
+                    """Give the operator a brief get-ready countdown before a prompt.
+
+                    The preparation period paces the transition into calibration,
+                    practice, and recorded presentations so the operator can settle
+                    before each stimulus.  It records nothing: no capture segment is
+                    opened, only progress updates are emitted.  A non-positive
+                    ``preparation_seconds`` disables it entirely.
+                    """
+                    seconds = profile.sgt.preparation_seconds
+                    if seconds <= 0:
+                        return
+                    started = time.monotonic()
+                    while (elapsed := time.monotonic() - started) < seconds:
+                        if progress:
+                            progress(
+                                SGTProgress(
+                                    JobState.RUNNING,
+                                    gesture=gesture,
+                                    stage="preparation",
+                                    instruction=_stage_instruction("preparation", gesture),
+                                    stimulus_image=_stimulus_image(profile, gesture),
+                                    total_trials=total,
+                                    elapsed_seconds=elapsed,
+                                    duration_seconds=seconds,
+                                    capture=output,
+                                )
+                            )
+                        if cancel.wait(
+                            min(profile.sgt.progress_interval_seconds, seconds - elapsed)
+                        ):
+                            raise InterruptedError("capture cancelled")
+
                 def run_unrecorded_stage(kind: str, gesture: str) -> None:
                     """Capture calibration/practice evidence without training labels."""
                     nonlocal segment_sequence
@@ -163,9 +196,11 @@ class SGTService:
 
                 if request.proportional and profile.sgt.activation_calibration:
                     for gesture in profile.sgt.gestures:
+                        run_preparation(gesture)
                         run_unrecorded_stage("calibration", gesture)
                 if profile.sgt.practice:
                     for gesture in profile.sgt.gestures:
+                        run_preparation(gesture)
                         run_unrecorded_stage("practice", gesture)
 
                 def emit_presentation(
@@ -242,6 +277,7 @@ class SGTService:
                     while True:
                         if cancel.is_set():
                             raise InterruptedError("capture cancelled")
+                        run_preparation(gesture)
                         segment_sequence += 1
                         trial_index = recorded_presentation + 1
                         emit_presentation(gesture, trial_index, activation, 0.0)
@@ -308,6 +344,8 @@ class SGTService:
 
 def _stage_instruction(stage: str, gesture: str) -> str:
     label = gesture.replace("_", " ")
+    if stage == "preparation":
+        return f"Get ready: {label}."
     if stage == "calibration":
         target = "relax" if gesture == "rest" else "hold a comfortable maximum"
         return f"Calibration: {label} — {target}."

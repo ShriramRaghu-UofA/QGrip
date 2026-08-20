@@ -2,6 +2,7 @@ import tempfile
 import threading
 import time
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -122,12 +123,42 @@ class SyntheticWorkflowTests(unittest.TestCase):
             profile = load_profile(write_profile(Path(directory)))
             progress = []
             SGTService().run(SGTRequest("s", profile, True), threading.Event(), progress.append)
-            self.assertEqual(progress[0].stage, "calibration")
+            # A get-ready preparation countdown precedes the first prompt.
+            self.assertEqual(progress[0].stage, "preparation")
             self.assertEqual(progress[0].gesture, "rest")
-            self.assertIn("Calibration", progress[0].instruction or "")
-            self.assertEqual(progress[0].duration_seconds, profile.sgt.duration_seconds)
+            self.assertIn("Get ready", progress[0].instruction or "")
+            self.assertEqual(progress[0].duration_seconds, profile.sgt.preparation_seconds)
+            calibration = next(item for item in progress if item.stage == "calibration")
+            self.assertEqual(calibration.gesture, "rest")
+            self.assertIn("Calibration", calibration.instruction or "")
+            self.assertEqual(calibration.duration_seconds, profile.sgt.duration_seconds)
             self.assertGreater(max(item.elapsed_seconds for item in progress), 0)
             self.assertTrue(any(item.stage == "presentation" for item in progress))
+
+    def test_preparation_precedes_each_recorded_presentation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            profile = load_profile(write_profile(Path(directory)))
+            progress: list[SGTProgress] = []
+            SGTService().run(SGTRequest("s", profile, False), threading.Event(), progress.append)
+            # Collapse the repeated progress ticks into ordered, distinct stage runs.
+            runs: list[str | None] = []
+            for item in progress:
+                if not runs or runs[-1] != item.stage:
+                    runs.append(item.stage)
+            self.assertIn("preparation", runs)
+            # Every recorded presentation run must be introduced by a preparation run.
+            self.assertTrue(any(stage == "presentation" for stage in runs))
+            for index, stage in enumerate(runs):
+                if stage == "presentation":
+                    self.assertEqual(runs[index - 1], "preparation")
+
+    def test_preparation_can_be_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            profile = load_profile(write_profile(Path(directory)))
+            profile = replace(profile, sgt=replace(profile.sgt, preparation_seconds=0.0))
+            progress: list[SGTProgress] = []
+            SGTService().run(SGTRequest("s", profile, True), threading.Event(), progress.append)
+            self.assertFalse(any(item.stage == "preparation" for item in progress))
 
     def test_coordinator_exposes_sgt_stimulus(self) -> None:
         class ReportingSGT(SGTService):

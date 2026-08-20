@@ -68,8 +68,9 @@
     sgtRunning &&
       !awaiting &&
       duration > 0 &&
-      ['presentation', 'calibration', 'practice'].includes(status.stage ?? '')
+      ['preparation', 'presentation', 'calibration', 'practice'].includes(status.stage ?? '')
   );
+  const preparing = $derived(status.stage === 'preparation');
   const countdownPercent = $derived(
     duration > 0 ? Math.min(100, Math.round((100 * localElapsed) / duration)) : 0
   );
@@ -356,8 +357,8 @@
 
             {#if sgtRunning && !awaiting && duration > 0}
               <div class="mt-6 space-y-1 text-left">
-                <div class="flex justify-between text-sm"><span>Hold the gesture</span><span>{countdownRemaining.toFixed(1)} s</span></div>
-                <progress class="progress progress-accent w-full" value={countdownPercent} max="100"></progress>
+                <div class="flex justify-between text-sm"><span>{preparing ? 'Get ready' : 'Hold the gesture'}</span><span>{countdownRemaining.toFixed(1)} s</span></div>
+                <progress class={['progress w-full', preparing ? 'progress-warning' : 'progress-accent']} value={countdownPercent} max="100"></progress>
               </div>
             {/if}
           </div>

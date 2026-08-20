@@ -101,6 +101,7 @@ class SGTConfig:
     )
     trials: int = 3
     duration_seconds: float = 4.0
+    preparation_seconds: float = 3.0
     practice: bool = True
     proportional: bool = True
     activation_calibration: bool = True

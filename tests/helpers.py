@@ -29,6 +29,7 @@ def write_profile(root: Path, *, handi: bool = False) -> Path:
             "gestures": ["rest", "open", "close"],
             "trials": 2,
             "duration_seconds": 0.05,
+            "preparation_seconds": 0.02,
             "practice": False,
             "proportional": True,
             "activation_calibration": True,

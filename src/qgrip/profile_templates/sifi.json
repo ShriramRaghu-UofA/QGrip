@@ -14,6 +14,7 @@
     "gestures": ["rest", "close", "open", "wrist_flexion", "wrist_extension", "pronation", "supination"],
     "trials": 3,
     "duration_seconds": 4,
+    "preparation_seconds": 3,
     "practice": true,
     "proportional": true,
     "activation_calibration": true, "progress_interval_seconds": 0.05
