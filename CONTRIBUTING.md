@@ -10,6 +10,10 @@ the wheel. Use `npm ci`, do not edit generated assets, and never commit `node_mo
 Behavior changes require regression tests; tests that generate artifacts must use temporary
 directories. Do not commit unless explicitly requested.
 
+`src/qgrip/vendor/` is attributed third-party source. Leave it byte-identical for ordinary
+QGrip work; a deliberate vendor update must be isolated, provenance-reviewed, and committed
+separately. Exclude vendor code from mechanical formatting and application-wide cleanup.
+
 Read `AGENTS.md` and `ARCHITECTURE.md` before changing lifecycle, public APIs, profiles,
 artifacts, inference, or hardware control.
 

@@ -31,6 +31,24 @@ The synthetic profile is useful for checking the software path. For a physical
 device, create the appropriate `sifi`, `myo_ble`, or `myo_dongle` profile and edit
 its device settings before running `doctor`.
 
+### Installation groups
+
+The quick start installs every optional dependency. Smaller deployments can select
+only the groups they need:
+
+| Group | Needed for |
+| --- | --- |
+| base package | profiles, SiFi/synthetic acquisition, capture/export, CLI, and dashboard |
+| `train` | Torch training and Torch-backed inference |
+| `onnx` | ONNX Runtime inference; use with `train` because checkpoint metadata is loaded through Torch |
+| `myo` | Myo BLE or USB-dongle transports |
+| `handi` | MessagePack RPC to the UNO Q Arduino Router |
+
+For example, a training workstation that uses SiFi and ONNX can run
+`uv sync --locked --extra train --extra onnx`; an UNO Q Handi deployment normally
+needs `train`, `onnx`, and `handi`. The `--all-extras --dev` form remains the simplest
+source-development setup.
+
 ## Choose a workflow
 
 Use the dashboard when an operator needs guided collection, artifact selection, and
@@ -134,7 +152,7 @@ uv run qgrip profile create synthetic.json --device synthetic
 uv run qgrip profile validate synthetic.json
 uv run qgrip doctor --profile synthetic.json
 
-# Record a screen-guided session, then derive its training dataset.
+# Record a timed SGT session, then derive its training dataset.
 uv run qgrip sgt demo --profile synthetic.json
 uv run qgrip export demo --profile synthetic.json
 
@@ -142,16 +160,28 @@ uv run qgrip export demo --profile synthetic.json
 uv run qgrip train demo --profile synthetic.json
 ```
 
-`sgt` records proportional targets by default; add `--discrete` to record and train
-a discrete model instead. `export` uses the subject's latest capture by default, or
-accepts one or more explicit capture-log paths. `train` likewise uses the latest
-capture when `--input` is omitted; repeat `--input <dataset.parquet>` to select
-specific exported datasets, and use `--model transformer|cnn1d|cnn2d|dense` to
-override the profile default.
+`sgt` records proportional targets by default; add `--discrete` to that command for
+a flat discrete capture. Training mode is selected independently, so add
+`--discrete` to `train` as well when fitting a discrete model. `export` uses the
+subject's latest capture by default, or accepts one or more explicit capture-log
+paths. `train` likewise uses the latest capture when `--input` is omitted and derives
+its Parquet file automatically if necessary. Repeat `--input <path>` to combine
+specific capture logs or Parquet datasets, and use
+`--model transformer|cnn1d|cnn2d|dense` to override the profile default.
+
+Capture and training requests are authoritative for proportional/discrete mode. The
+currently serialized `sgt.proportional` profile field is not consumed by the CLI or
+dashboard adapters; both default to proportional unless their request selects discrete.
+
+The CLI `sgt` command follows the configured gesture/trial timing and writes the same
+markers as dashboard capture, but it does not render operator cues in the terminal. Use
+the dashboard for human data collection that needs visible gesture, preparation, and
+activation prompts; use CLI capture for scripted or externally cued operation.
 
 Training creates a run directory under
-`data/<subject>/models/<run-id>/` containing `model.pt`, `model.onnx` when ONNX
-export is enabled, `metadata.json`, and `metrics.json`. These artifacts are
+`data/<subject>/models/<run-id>/` containing `model.pt`, `metadata.json`, and
+`metrics.json`. Successful optional ONNX export adds `model.onnx`; a failed export adds
+`onnx-error.txt` while preserving the usable Torch checkpoint. These artifacts are
 self-describing and are not overwritten.
 
 ### Run live inference from the CLI
@@ -169,8 +199,10 @@ uv run qgrip infer data/demo/models/RUN/model.pt --profile synthetic.json
 Each emitted JSON object has `gesture`, `confidence`, `activation`, and
 `latency_ms`. The CLI checks model/device channel compatibility, uses the profile's
 inference cadence, confidence gate, and debounce setting, and prints only accepted
-predictions. Inference uses an adjacent ONNX artifact automatically when available;
-otherwise it uses the Torch checkpoint.
+predictions. With `inference.backend` set to `auto`, inference prefers an adjacent
+ONNX artifact and falls back to Torch if the artifact or ONNX Runtime cannot be
+loaded. `torch` forces the checkpoint backend; `onnx` requires the adjacent ONNX
+artifact and fails instead of falling back.
 
 ## Use real-time inference from Python
 
@@ -231,8 +263,8 @@ checkpoint is the usual input. A `.onnx` path is also accepted, but its matching
 Training is implemented directly in QGrip. The `transformer`, `cnn1d`, `cnn2d`,
 and `dense` presets share an `EMGPreprocessor` module that owns normalization and
 `torch.stft`. Proportional models learn an activation head; discrete models expose
-the same inference contract with activation fixed at `1.0`. Inference automatically
-uses the adjacent ONNX model when available and otherwise uses the Torch checkpoint.
+the same inference contract with activation fixed at `1.0`. Backend selection follows
+the profile policy described above.
 No scripts or Python modules are loaded from the reference acquisition repository at
 runtime.
 
@@ -245,10 +277,15 @@ from the reference acquisition repository; PyoMyo itself is not installed.
 Profiles are the editable configuration boundary for QGrip. They compose device,
 acquisition, SGT, model, training, inference, dashboard, and optional Handi settings;
 the CLI, dashboard, and standalone Handi runtime use the same loaded profile. Create
-one from a template with `qgrip profile create`, then edit it before running a workflow.
+one with `qgrip profile create`, then edit it before running a workflow.
 Each service reads only its own nested section: SGT reads `sgt` and `acquisition`,
 training reads `training` and `model`, and live inference/Handi read `inference` and
 `acquisition` alongside the device and model artifacts.
+
+Paths in a profile are resolved relative to the profile file, not the current working
+directory. `schema_version` is mandatory and must be exactly `1`; unknown keys and
+unsupported enum values are rejected. `rest` must appear among at least two unique
+`sgt.gestures`.
 
 The `training` section controls every training parameter. Its three timing settings
 are deliberately independent: `dataset_stride_seconds` controls overlap between
@@ -283,9 +320,8 @@ Set `stft_n_fft` and `stft_hop_samples` together to override QGrip's sample-rate
 dependent STFT defaults; use `null` for automatic selection. `normalization` is
 `signed_8bit` for Myo profiles and `dataset_standardize` for SiFi and other devices;
 the latter fits statistics from the training split for proportional and discrete models.
-Profile validation
-rejects unknown keys and invalid ranges before capture, training, inference, or Handi
-control begins.
+Profile validation rejects unknown keys and invalid ranges before capture, training,
+inference, or Handi control begins.
 
 Every exported Parquet row contains `activation_energy`, a causal, channel-demeaned RMS
 value over the trailing `activation_energy_window_seconds`; the same method and effective
@@ -305,8 +341,56 @@ signal-health thresholds. `model.architecture` accepts only parameters for the s
 model (for example, Transformer `d_model`, `nhead`, `dim_feedforward`, and `dropout`).
 `inference` owns output cadence, confidence/debounce policy, and its short cooperative
 waits. `dashboard.handi_timeout_seconds` controls only the optional Handi health and
-calibration HTTP proxy. The shipped templates spell out all of these values so profiles
-are self-contained and safe to modify.
+calibration HTTP proxy. The shipped templates provide normal operating values; fields
+they omit receive the versioned schema defaults. Use
+`qgrip profile show <profile.json>` to inspect the fully resolved document.
+
+## Artifact contracts
+
+QGrip writes one subject tree beneath `data_root`:
+
+```text
+<data_root>/<subject>/
+├── raw/
+│   ├── capture-<UTC timestamp>.capture.jsonl.zst
+│   └── capture-<UTC timestamp>.parquet
+└── models/
+    └── <UTC run timestamp>/
+        ├── model.pt
+        ├── model.onnx          # when enabled and export succeeds
+        ├── metadata.json
+        ├── metrics.json
+        └── onnx-error.txt      # only when an attempted export fails
+```
+
+Subject identifiers may contain only letters, numbers, `-`, and `_`. Capture logs are
+append-only authoritative records produced by `sifi-streamer`. Export requires a clean
+terminal capture record and keeps only completed, non-superseded SGT presentation
+segments; preparation and practice segments are not training data. An existing Parquet
+path is never silently replaced.
+
+The canonical Parquet columns are:
+
+- ordering and provenance: `timestamp`, `trial`, `sequence`,
+  `sample_index_in_packet`, `capture_file`, `host_monotonic_ns`, and `host_unix_ns`;
+- signal identity and health: `device`, `sample_rate_hz`, `samples_lost`, and
+  contiguous `channel_0` through `channel_<n-1>`;
+- labels: `gesture`, prompted `activation`, and measured `activation_energy`.
+
+For proportional training, schema metadata must declare
+`qgrip.activation_energy.method = causal_rms` and the exact energy-window duration and
+sample count. Training rejects missing channels, missing provenance fields, mismatched
+sample rates, non-finite windows, or energy metadata that disagrees with the profile.
+There is deliberately no older-Parquet compatibility path.
+
+`model.pt` is a strict checkpoint contract. It requires `checkpoint_version = 1`, a
+supported `model_name`, a canonical `model_config`, model weights, labels, device and
+sample-rate metadata, validation metrics, source inputs, and proportional activation
+calibration when applicable. Structural values such as window size, channel count,
+class count, STFT shape, normalization, and activation-head mode live only in
+`model_config`. `metadata.json` is the same document without model weights;
+`metrics.json` contains per-epoch training and validation results. Unsupported or
+unversioned checkpoints are rejected rather than guessed or migrated.
 
 ## Standalone Handi
 
@@ -319,9 +403,25 @@ RPC connection, start pose, movement, and shutdown. An optional loopback observe
 can be enabled in the profile. The App Lab Brick/sketch lives separately; configure
 its repository in `qgrip.handi.HANDI_BRICK_REPOSITORY_URL` when published.
 
-Every motor command is clamped to configured joint limits and sent as one
-`set_positions` Router call. Stopping QGrip commands does not disable servo torque and
-does not replace a physical emergency stop.
+The observer API has no authentication and only defaults to loopback. Keep
+`handi.api_host` on a trusted loopback interface unless an authenticated network boundary
+is supplied outside QGrip.
+
+Calibration persistence is not implemented yet. The observer API can jog and read live
+positions, but `/api/v1/calibration/save` reports `saved: false`. Likewise,
+`qgrip handi calibrate --output <path>` currently writes an atomically validated copy of
+the loaded profile; it does not query the controller or replace joint limits from hardware.
+
+An enabled `handi` profile must define at least one joint with `minimum < maximum` and
+an in-range `start`. Gesture mappings resolve either to incremental `open`/`close`
+movement or to a named grip preset. Unmapped gestures update observed prediction state
+but do not move the hand. The runtime validates checkpoint/device channels and sample
+rate before applying the configured start pose.
+
+Every motor command is clamped to configured joint limits. Each `set_positions` Router
+call carries an ordered position for every configured joint; an incremental multi-joint
+open/close action currently sends one such call per joint. Stopping QGrip commands does
+not disable servo torque and does not replace a physical emergency stop.
 
 ## Gesture images
 
