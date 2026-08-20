@@ -272,7 +272,7 @@ class SGTService:
                     """Return the held target for one stepped presentation."""
                     return 0.0 if gesture == "rest" else target
 
-                def run_preparation(gesture: str) -> None:
+                def run_preparation(gesture: str, target: float) -> None:
                     """Give the operator a brief get-ready countdown before a prompt.
 
                     The preparation period paces the transition into practice
@@ -287,6 +287,7 @@ class SGTService:
                     started = time.monotonic()
                     while (elapsed := time.monotonic() - started) < seconds:
                         if progress:
+                            measured = measured_activation(gesture)
                             progress(
                                 SGTProgress(
                                     JobState.RUNNING,
@@ -297,6 +298,11 @@ class SGTService:
                                     total_trials=total,
                                     elapsed_seconds=elapsed,
                                     duration_seconds=seconds,
+                                    activation=target,
+                                    measured_activation=measured,
+                                    in_tolerance=(
+                                        abs(measured - target) <= profile.sgt.activation_tolerance
+                                    ),
                                     capture=output,
                                 )
                             )
@@ -383,7 +389,7 @@ class SGTService:
                             else profile.sgt.activation_levels
                         )
                         for target in practice_targets:
-                            run_preparation(gesture)
+                            run_preparation(gesture, target)
                             run_unrecorded_stage("practice", gesture, target)
 
                 def emit_presentation(
@@ -446,6 +452,7 @@ class SGTService:
                         trial_index,
                         activation,
                         profile.sgt.duration_seconds,
+                        measured_activation(gesture),
                         awaiting=True,
                     )
                     while True:
@@ -474,7 +481,7 @@ class SGTService:
                         while True:
                             if cancel.is_set():
                                 raise InterruptedError("capture cancelled")
-                            run_preparation(gesture)
+                            run_preparation(gesture, target)
                             segment_sequence += 1
                             trial_index = recorded_presentation + 1
                             emit_presentation(gesture, trial_index, target, 0.0)

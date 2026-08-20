@@ -231,6 +231,13 @@ class SyntheticWorkflowTests(unittest.TestCase):
             self.assertEqual(progress[0].gesture, "rest")
             self.assertIn("Get ready", progress[0].instruction or "")
             self.assertEqual(progress[0].duration_seconds, profile.sgt.preparation_seconds)
+            self.assertTrue(
+                any(
+                    item.stage == "preparation" and item.activation > 0
+                    for item in progress
+                    if item.gesture != "rest"
+                )
+            )
             practice = next(item for item in progress if item.stage == "practice")
             self.assertEqual(practice.gesture, "rest")
             self.assertIn("Practice", practice.instruction or "")

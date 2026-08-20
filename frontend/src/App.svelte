@@ -42,8 +42,11 @@
   let checkingDevice = $state(false);
 
   // Screen Guided Training state machine controls.
+  const activationDisplayTimeConstantMs = 300;
   let autoMode = $state(true);
   let stimulusFailed = $state(false);
+  let displayedActivation = $state(0);
+  let activationDisplayUpdatedAt: number | undefined;
 
   // Transport: prefer server push (SSE), fall back to polling when unavailable.
   let sseActive = $state(false);
@@ -79,7 +82,11 @@
   );
   const countdownRemaining = $derived(Math.max(0, duration - localElapsed));
   const targetPercent = $derived(Math.round((status.activation ?? 0) * 100));
-  const measuredPercent = $derived(Math.round((status.measured_activation ?? 0) * 100));
+  const measuredPercent = $derived(Math.round(displayedActivation * 100));
+  const displayInTolerance = $derived(
+    Math.abs(displayedActivation - (status.activation ?? 0)) <=
+      (bootstrap?.activation_tolerance ?? 0.1)
+  );
 
   // Training telemetry surfaced on the Train stage.
   const latestMetric = $derived(status.metrics?.at(-1));
@@ -218,7 +225,9 @@
   /** Replace local state with an authoritative status snapshot and derive UI updates. */
   function applyStatus(next: JobStatus): void {
     const wasRunning = status.state === 'running';
+    const wasSgtRunning = status.kind === 'sgt' && wasRunning;
     status = next;
+    updateDisplayedActivation(next, wasSgtRunning);
     if (next.prediction) {
       predictionHistory = [...predictionHistory.slice(-79), next.prediction];
     }
@@ -231,6 +240,25 @@
         void loadArtifacts();
       }
     }
+  }
+
+  /** Smooth noisy live activation for display without changing captured or trained data. */
+  function updateDisplayedActivation(next: JobStatus, wasSgtRunning: boolean): void {
+    if (next.kind !== 'sgt' || next.state !== 'running') {
+      displayedActivation = 0;
+      activationDisplayUpdatedAt = undefined;
+      return;
+    }
+    const raw = Math.max(0, Math.min(1, next.measured_activation ?? 0));
+    const now = performance.now();
+    if (!wasSgtRunning || activationDisplayUpdatedAt === undefined) {
+      displayedActivation = raw;
+    } else {
+      const elapsed = Math.max(0, now - activationDisplayUpdatedAt);
+      const alpha = 1 - Math.exp(-elapsed / activationDisplayTimeConstantMs);
+      displayedActivation += alpha * (raw - displayedActivation);
+    }
+    activationDisplayUpdatedAt = now;
   }
 
   /** Start one backend workflow and activate polling only when SSE is unavailable. */
@@ -394,14 +422,14 @@
           <div class="space-y-1 text-left">
             <div class="flex justify-between text-sm"><span>Session progress</span><span>{progress}%</span></div>
             <progress class="progress progress-primary w-full" value={progress} max="100"></progress>
-            {#if ['presentation', 'practice'].includes(status.stage ?? '') && !awaiting}
+            {#if sgtRunning}
               <div class="mt-2 space-y-1">
-                <div class="flex justify-between text-sm text-base-content/70"><span>Target</span><span>{targetPercent}%</span></div>
+                <div class="flex justify-between text-sm text-base-content/70"><span>{preparing ? 'Next target' : 'Target'}</span><span>{targetPercent}%</span></div>
                 <progress class="progress progress-secondary w-full" value={targetPercent} max="100"></progress>
                 <div class="flex justify-between text-sm text-base-content/70"><span>Measured EMG</span><span>{measuredPercent}%</span></div>
                 <progress class="progress progress-accent w-full" value={measuredPercent} max="100"></progress>
-                <div class={['text-xs', status.in_tolerance ? 'text-success' : 'text-warning']}>
-                  {status.in_tolerance ? 'Within target band' : 'Outside target band'}
+                <div class={['text-xs', displayInTolerance ? 'text-success' : 'text-warning']}>
+                  {displayInTolerance ? 'Within target band' : 'Outside target band'}
                 </div>
               </div>
             {/if}

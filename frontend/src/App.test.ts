@@ -38,6 +38,45 @@ test('theme selection persists', async () => {
   expect(localStorage.getItem('qgrip-theme')).toBe('nord');
 });
 
+test('SGT activation guidance remains visible during preparation', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      let body: object = {
+        api_version: 1,
+        profile: 'synthetic.json',
+        device: 'synthetic',
+        gestures: ['rest', 'open'],
+        models: ['dense'],
+        activation_tolerance: 0.1,
+      };
+      if (path.includes('/api/v1/artifacts')) body = { artifacts: [] };
+      if (path.includes('/api/v1/sgt/start'))
+        body = {
+          state: 'running',
+          kind: 'sgt',
+          stage: 'preparation',
+          gesture: 'open',
+          activation: 0.75,
+          measured_activation: 0.42,
+          duration_seconds: 2,
+        };
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }),
+  );
+  const user = userEvent.setup();
+  render(App);
+  await user.click(screen.getByRole('button', { name: 'Collect' }));
+  await user.click(screen.getByRole('button', { name: 'Start collection' }));
+  await waitFor(() => expect(screen.getByText('Next target')).toBeInTheDocument());
+  expect(screen.getByText('75%')).toBeInTheDocument();
+  expect(screen.getByText('42%')).toBeInTheDocument();
+});
+
 test('live inference renders backend predictions', async () => {
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input);

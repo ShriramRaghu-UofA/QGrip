@@ -16,12 +16,9 @@ class AdapterTests(unittest.TestCase):
             with TestClient(app) as client:
                 self.assertEqual(client.get("/openapi.json").status_code, 200)
                 self.assertEqual(client.get("/api/v1/bootstrap").status_code, 401)
-                self.assertEqual(
-                    client.get(
-                        "/api/v1/bootstrap", headers={"X-QGrip-Token": "secret"}
-                    ).status_code,
-                    200,
-                )
+                bootstrap = client.get("/api/v1/bootstrap", headers={"X-QGrip-Token": "secret"})
+                self.assertEqual(bootstrap.status_code, 200)
+                self.assertEqual(bootstrap.json()["activation_tolerance"], 0.1)
                 self.assertEqual(client.get("/api/v1/artifacts").status_code, 401)
                 response = client.get("/api/v1/artifacts", headers={"X-QGrip-Token": "secret"})
                 self.assertEqual(response.status_code, 200)

@@ -8,6 +8,7 @@ export interface Bootstrap {
   device: string;
   gestures: string[];
   models: string[];
+  activation_tolerance: number;
 }
 
 /** Authoritative, replace-not-patch snapshot broadcast on the status SSE channel. */

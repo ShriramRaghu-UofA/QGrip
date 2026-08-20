@@ -147,6 +147,7 @@ def create_app(
             "device": current.device.kind,
             "gestures": current.sgt.gestures,
             "models": list(ModelName),
+            "activation_tolerance": current.sgt.activation_tolerance,
         }
 
     @app.get("/api/v1/doctor", dependencies=protected)
