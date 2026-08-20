@@ -44,8 +44,10 @@ class AdapterTests(unittest.TestCase):
             notification_for(completed),
             {"kind": "training", "level": "success", "message": "training completed"},
         )
-        self.assertEqual(notification_for(failed)["level"], "error")
-        self.assertEqual(notification_for(failed)["message"], "boom")
+        failed_notification = notification_for(failed)
+        assert failed_notification is not None
+        self.assertEqual(failed_notification["level"], "error")
+        self.assertEqual(failed_notification["message"], "boom")
         self.assertIsNone(notification_for(JobStatus("job", "training", JobState.RUNNING)))
 
     def test_cli_help_entry_points(self) -> None:

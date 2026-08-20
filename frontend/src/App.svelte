@@ -68,7 +68,7 @@
     sgtRunning &&
       !awaiting &&
       duration > 0 &&
-      ['preparation', 'presentation', 'calibration', 'practice'].includes(status.stage ?? '')
+      ['preparation', 'presentation', 'practice'].includes(status.stage ?? '')
   );
   const preparing = $derived(status.stage === 'preparation');
   const countdownPercent = $derived(
@@ -366,7 +366,7 @@
           <div class="space-y-1 text-left">
             <div class="flex justify-between text-sm"><span>Session progress</span><span>{progress}%</span></div>
             <progress class="progress progress-primary w-full" value={progress} max="100"></progress>
-            {#if status.stage === 'presentation' && !awaiting}
+            {#if ['presentation', 'practice'].includes(status.stage ?? '') && !awaiting}
               <div class="mt-2 space-y-1">
                 <div class="flex justify-between text-sm text-base-content/70"><span>Activation target</span><span>{Math.round((status.activation ?? 0) * 100)}%</span></div>
                 <progress class="progress progress-secondary w-full" value={Math.round((status.activation ?? 0) * 100)} max="100"></progress>

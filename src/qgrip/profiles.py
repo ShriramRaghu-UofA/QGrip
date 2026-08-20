@@ -217,7 +217,6 @@ def _parse_sgt(raw: object) -> SGTConfig:
             "preparation_seconds",
             "practice",
             "proportional",
-            "activation_calibration",
             "progress_interval_seconds",
         },
         "sgt",
@@ -251,9 +250,6 @@ def _parse_sgt(raw: object) -> SGTConfig:
         preparation_seconds=preparation_seconds,
         practice=_boolean(data.get("practice", True), "sgt.practice"),
         proportional=_boolean(data.get("proportional", True), "sgt.proportional"),
-        activation_calibration=_boolean(
-            data.get("activation_calibration", True), "sgt.activation_calibration"
-        ),
         progress_interval_seconds=_finite(
             data.get("progress_interval_seconds", 0.05),
             "sgt.progress_interval_seconds",
@@ -608,7 +604,6 @@ def default_profile(kind: DeviceKind | str = DeviceKind.SYNTHETIC) -> dict[str, 
             "preparation_seconds": 3,
             "practice": True,
             "proportional": True,
-            "activation_calibration": True,
             "progress_interval_seconds": 0.05,
         },
         "model": {"name": "transformer", "architecture": {}},

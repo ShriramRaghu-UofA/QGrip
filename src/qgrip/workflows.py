@@ -111,11 +111,25 @@ class SGTService:
                 recorded_presentation = 0
                 paused = False
 
+                def prompt_at(gesture: str, elapsed: float) -> float:
+                    """Activation the operator is asked to hold at ``elapsed`` seconds.
+
+                    Proportional capture sweeps a triangle ramp so a single hold
+                    covers the whole activation range; the identical shape is
+                    reconstructed per sample during export to label training.
+                    Non-proportional capture holds a flat full contraction.
+                    """
+                    if not request.proportional:
+                        return 0.0 if gesture == "rest" else 1.0
+                    duration = profile.sgt.duration_seconds
+                    fraction = elapsed / duration if duration > 0 else 0.0
+                    return activation_target(gesture, fraction)
+
                 def run_preparation(gesture: str) -> None:
                     """Give the operator a brief get-ready countdown before a prompt.
 
-                    The preparation period paces the transition into calibration,
-                    practice, and recorded presentations so the operator can settle
+                    The preparation period paces the transition into practice
+                    and recorded presentations so the operator can settle
                     before each stimulus.  It records nothing: no capture segment is
                     opened, only progress updates are emitted.  A non-positive
                     ``preparation_seconds`` disables it entirely.
@@ -145,7 +159,13 @@ class SGTService:
                             raise InterruptedError("capture cancelled")
 
                 def run_unrecorded_stage(kind: str, gesture: str) -> None:
-                    """Capture calibration/practice evidence without training labels."""
+                    """Capture practice evidence without training labels.
+
+                    The practice stage mirrors the recorded presentation prompt so
+                    the operator can rehearse following the activation ramp; the
+                    same triangle target is surfaced via ``activation`` but nothing
+                    here is retained as a training label.
+                    """
                     nonlocal segment_sequence
                     segment_sequence += 1
                     stage_id = f"{kind}-{segment_sequence:03d}"
@@ -159,6 +179,7 @@ class SGTService:
                                 stimulus_image=_stimulus_image(profile, gesture),
                                 total_trials=total,
                                 duration_seconds=profile.sgt.duration_seconds,
+                                activation=prompt_at(gesture, 0.0),
                                 capture=output,
                             )
                         )
@@ -187,6 +208,7 @@ class SGTService:
                                         total_trials=total,
                                         elapsed_seconds=elapsed,
                                         duration_seconds=profile.sgt.duration_seconds,
+                                        activation=prompt_at(gesture, elapsed),
                                         capture=output,
                                     )
                                 )
@@ -195,10 +217,6 @@ class SGTService:
                             stage_id, "completed" if not cancel.is_set() else "aborted"
                         )
 
-                if request.proportional and profile.sgt.activation_calibration:
-                    for gesture in profile.sgt.gestures:
-                        run_preparation(gesture)
-                        run_unrecorded_stage("calibration", gesture)
                 if profile.sgt.practice:
                     for gesture in profile.sgt.gestures:
                         run_preparation(gesture)
@@ -273,20 +291,6 @@ class SGTService:
                         if command == SGTCommand.PAUSE:
                             paused = True
 
-                def prompt_at(gesture: str, elapsed: float) -> float:
-                    """Activation the operator is asked to hold at ``elapsed`` seconds.
-
-                    Proportional capture sweeps a triangle ramp so a single hold
-                    covers the whole activation range; the identical shape is
-                    reconstructed per sample during export to label training.
-                    Non-proportional capture holds a flat full contraction.
-                    """
-                    if not request.proportional:
-                        return 0.0 if gesture == "rest" else 1.0
-                    duration = profile.sgt.duration_seconds
-                    fraction = elapsed / duration if duration > 0 else 0.0
-                    return activation_target(gesture, fraction)
-
                 def present_gesture(gesture: str, trial: int) -> None:
                     nonlocal segment_sequence, recorded_presentation
                     duration = profile.sgt.duration_seconds
@@ -358,9 +362,6 @@ def _stage_instruction(stage: str, gesture: str) -> str:
     label = gesture.replace("_", " ")
     if stage == "preparation":
         return f"Get ready: {label}."
-    if stage == "calibration":
-        target = "relax" if gesture == "rest" else "hold a comfortable maximum"
-        return f"Calibration: {label} — {target}."
     if stage == "practice":
         return f"Practice: {label}."
     return f"Perform: {label}."

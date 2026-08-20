@@ -32,7 +32,6 @@ def write_profile(root: Path, *, handi: bool = False) -> Path:
             "preparation_seconds": 0.02,
             "practice": False,
             "proportional": True,
-            "activation_calibration": True,
             "progress_interval_seconds": 0.01,
         },
         "model": {"name": "dense", "architecture": {}},

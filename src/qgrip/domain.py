@@ -121,7 +121,6 @@ class SGTConfig:
     preparation_seconds: float = 3.0
     practice: bool = True
     proportional: bool = True
-    activation_calibration: bool = True
     progress_interval_seconds: float = 0.05
 
 

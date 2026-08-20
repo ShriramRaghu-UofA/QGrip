@@ -155,9 +155,10 @@ class SyntheticWorkflowTests(unittest.TestCase):
             )
             self.assertEqual(prediction.activation, 1.0)
 
-    def test_sgt_reports_calibration_and_presentation_stimuli(self) -> None:
+    def test_sgt_reports_practice_and_presentation_stimuli(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             profile = load_profile(write_profile(Path(directory)))
+            profile = replace(profile, sgt=replace(profile.sgt, practice=True))
             progress = []
             SGTService().run(SGTRequest("s", profile, True), threading.Event(), progress.append)
             # A get-ready preparation countdown precedes the first prompt.
@@ -165,10 +166,18 @@ class SyntheticWorkflowTests(unittest.TestCase):
             self.assertEqual(progress[0].gesture, "rest")
             self.assertIn("Get ready", progress[0].instruction or "")
             self.assertEqual(progress[0].duration_seconds, profile.sgt.preparation_seconds)
-            calibration = next(item for item in progress if item.stage == "calibration")
-            self.assertEqual(calibration.gesture, "rest")
-            self.assertIn("Calibration", calibration.instruction or "")
-            self.assertEqual(calibration.duration_seconds, profile.sgt.duration_seconds)
+            practice = next(item for item in progress if item.stage == "practice")
+            self.assertEqual(practice.gesture, "rest")
+            self.assertIn("Practice", practice.instruction or "")
+            self.assertEqual(practice.duration_seconds, profile.sgt.duration_seconds)
+            # The practice stage surfaces the same activation ramp as presentations.
+            self.assertTrue(
+                any(
+                    item.stage == "practice" and item.activation > 0
+                    for item in progress
+                    if item.gesture != "rest"
+                )
+            )
             self.assertGreater(max(item.elapsed_seconds for item in progress), 0)
             self.assertTrue(any(item.stage == "presentation" for item in progress))
 
@@ -211,8 +220,8 @@ class SyntheticWorkflowTests(unittest.TestCase):
                     SGTProgress(
                         JobState.RUNNING,
                         gesture="rest",
-                        stage="calibration",
-                        instruction="Calibration: rest — relax.",
+                        stage="practice",
+                        instruction="Practice: rest.",
                         stimulus_image="rest.png",
                     )
                 )

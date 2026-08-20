@@ -17,7 +17,7 @@
     "preparation_seconds": 3,
     "practice": true,
     "proportional": true,
-    "activation_calibration": true, "progress_interval_seconds": 0.05
+    "progress_interval_seconds": 0.05
   },
   "model": {"name": "transformer", "architecture": {}},
   "training": {

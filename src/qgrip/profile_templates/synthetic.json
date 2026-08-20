@@ -20,7 +20,6 @@
     "duration_seconds": 4,
     "practice": true,
     "proportional": true,
-    "activation_calibration": true,
     "progress_interval_seconds": 0.05
   },
   "model": {"name": "transformer", "architecture": {}},
