@@ -25,6 +25,7 @@ from qgrip.domain import (
     JobStatus,
     Prediction,
     QGripProfile,
+    SGTCommand,
     SGTProgress,
     SGTRequest,
     TrainingRequest,
@@ -41,9 +42,47 @@ from qgrip.streaming import (
 ProgressCallback = Callable[[SGTProgress], None]
 
 
+class SGTCommandGate:
+    """Thread-safe control channel for interactive Screen Guided Training.
+
+    The capture thread blocks on :meth:`take` at gate points (after each recorded
+    presentation in manual mode, or whenever paused); adapters push proceed,
+    repeat, pause, resume, or abort commands through :meth:`send`.
+    """
+
+    def __init__(self) -> None:
+        self._condition = threading.Condition()
+        self._pending: deque[SGTCommand] = deque()
+
+    def send(self, command: SGTCommand) -> None:
+        with self._condition:
+            self._pending.append(command)
+            self._condition.notify_all()
+
+    def drain(self) -> list[SGTCommand]:
+        """Return and clear queued commands without blocking."""
+        with self._condition:
+            queued = list(self._pending)
+            self._pending.clear()
+            return queued
+
+    def take(self, cancel: threading.Event, poll_seconds: float = 0.1) -> SGTCommand | None:
+        """Block until a command arrives; return ``None`` when cancelled."""
+        with self._condition:
+            while not self._pending:
+                if cancel.is_set():
+                    return None
+                self._condition.wait(poll_seconds)
+            return self._pending.popleft()
+
+
 class SGTService:
     def run(
-        self, request: SGTRequest, cancel: threading.Event, progress: ProgressCallback | None = None
+        self,
+        request: SGTRequest,
+        cancel: threading.Event,
+        progress: ProgressCallback | None = None,
+        gate: SGTCommandGate | None = None,
     ) -> Path:
         profile = request.profile
         output = new_capture_path(profile, request.subject)
@@ -69,6 +108,7 @@ class SGTService:
             with runtime.controller:
                 segment_sequence = 0
                 recorded_presentation = 0
+                paused = False
 
                 def run_unrecorded_stage(kind: str, gesture: str) -> None:
                     """Capture calibration/practice evidence without training labels."""
@@ -127,77 +167,130 @@ class SGTService:
                 if profile.sgt.practice:
                     for gesture in profile.sgt.gestures:
                         run_unrecorded_stage("practice", gesture)
+
+                def emit_presentation(
+                    gesture: str,
+                    trial_index: int,
+                    activation: float,
+                    elapsed: float,
+                    *,
+                    awaiting: bool = False,
+                ) -> None:
+                    if not progress:
+                        return
+                    progress(
+                        SGTProgress(
+                            JobState.RUNNING,
+                            gesture=gesture,
+                            stage="awaiting" if awaiting else "presentation",
+                            instruction=_stage_instruction("presentation", gesture),
+                            stimulus_image=_stimulus_image(profile, gesture),
+                            trial=trial_index,
+                            total_trials=total,
+                            elapsed_seconds=elapsed,
+                            duration_seconds=profile.sgt.duration_seconds,
+                            activation=activation,
+                            capture=output,
+                            awaiting_command=awaiting,
+                        )
+                    )
+
+                def await_gate(gesture: str, trial_index: int, activation: float) -> str:
+                    """Block until the operator proceeds or repeats the stimulus.
+
+                    Auto mode advances immediately unless paused; manual mode always
+                    waits.  Returns ``"repeat"`` to redo the stimulus, else ``"next"``.
+                    """
+                    nonlocal paused
+                    if request.auto and not paused:
+                        for command in gate.drain() if gate else []:
+                            if command == SGTCommand.PAUSE:
+                                paused = True
+                            elif command == SGTCommand.RESUME:
+                                paused = False
+                            elif command == SGTCommand.REPEAT:
+                                return "repeat"
+                            elif command == SGTCommand.ABORT:
+                                cancel.set()
+                                raise InterruptedError("capture cancelled")
+                        if not paused:
+                            return "next"
+                    if gate is None:
+                        return "next"
+                    emit_presentation(
+                        gesture,
+                        trial_index,
+                        activation,
+                        profile.sgt.duration_seconds,
+                        awaiting=True,
+                    )
+                    while True:
+                        command = gate.take(cancel)
+                        if command is None or command == SGTCommand.ABORT:
+                            cancel.set()
+                            raise InterruptedError("capture cancelled")
+                        if command == SGTCommand.REPEAT:
+                            return "repeat"
+                        if command == SGTCommand.RESUME:
+                            paused = False
+                            return "next"
+                        if command == SGTCommand.PAUSE:
+                            paused = True
+
+                def present_gesture(gesture: str, trial: int, activation: float) -> None:
+                    nonlocal segment_sequence, recorded_presentation
+                    while True:
+                        if cancel.is_set():
+                            raise InterruptedError("capture cancelled")
+                        segment_sequence += 1
+                        trial_index = recorded_presentation + 1
+                        emit_presentation(gesture, trial_index, activation, 0.0)
+                        presentation_id = runtime.controller.start_segment(
+                            f"presentation-{trial:03d}-{segment_sequence:03d}",
+                            "presentation",
+                            label=gesture,
+                            trial=trial,
+                            activation=activation,
+                        )
+                        runtime.controller.marker(
+                            presentation_id,
+                            "activation_target",
+                            label=gesture,
+                            activation=activation,
+                        )
+                        started = time.monotonic()
+                        while (
+                            elapsed := time.monotonic() - started
+                        ) < profile.sgt.duration_seconds:
+                            if cancel.wait(
+                                min(
+                                    profile.sgt.progress_interval_seconds,
+                                    profile.sgt.duration_seconds - elapsed,
+                                )
+                            ):
+                                raise InterruptedError("capture cancelled")
+                            emit_presentation(gesture, trial_index, activation, elapsed)
+                        runtime.controller.stop_segment(presentation_id, "completed")
+                        if await_gate(gesture, trial_index, activation) == "repeat":
+                            runtime.controller.marker(
+                                presentation_id, "presentation_superseded", label=gesture
+                            )
+                            continue
+                        recorded_presentation = trial_index
+                        return
+
                 for trial in range(1, profile.sgt.trials + 1):
                     trial_id = runtime.controller.start_segment(
                         f"trial-{trial:03d}", "trial", trial=trial
                     )
                     try:
                         for gesture in profile.sgt.gestures:
-                            if cancel.is_set():
-                                raise InterruptedError("capture cancelled")
-                            segment_sequence += 1
-                            recorded_presentation += 1
                             activation = (
                                 0.0
                                 if gesture == "rest"
                                 else (trial / profile.sgt.trials if request.proportional else 1.0)
                             )
-                            if progress:
-                                progress(
-                                    SGTProgress(
-                                        JobState.RUNNING,
-                                        gesture=gesture,
-                                        stage="presentation",
-                                        instruction=_stage_instruction("presentation", gesture),
-                                        stimulus_image=_stimulus_image(profile, gesture),
-                                        trial=recorded_presentation,
-                                        total_trials=total,
-                                        duration_seconds=profile.sgt.duration_seconds,
-                                        activation=activation,
-                                        capture=output,
-                                    )
-                                )
-                            presentation_id = runtime.controller.start_segment(
-                                f"presentation-{trial:03d}-{segment_sequence:03d}",
-                                "presentation",
-                                label=gesture,
-                                trial=trial,
-                                activation=activation,
-                            )
-                            runtime.controller.marker(
-                                presentation_id,
-                                "activation_target",
-                                label=gesture,
-                                activation=activation,
-                            )
-                            started = time.monotonic()
-                            while (
-                                elapsed := time.monotonic() - started
-                            ) < profile.sgt.duration_seconds:
-                                if cancel.wait(
-                                    min(
-                                        profile.sgt.progress_interval_seconds,
-                                        profile.sgt.duration_seconds - elapsed,
-                                    )
-                                ):
-                                    raise InterruptedError("capture cancelled")
-                                if progress:
-                                    progress(
-                                        SGTProgress(
-                                            JobState.RUNNING,
-                                            gesture=gesture,
-                                            stage="presentation",
-                                            instruction=_stage_instruction("presentation", gesture),
-                                            stimulus_image=_stimulus_image(profile, gesture),
-                                            trial=recorded_presentation,
-                                            total_trials=total,
-                                            elapsed_seconds=elapsed,
-                                            duration_seconds=profile.sgt.duration_seconds,
-                                            activation=activation,
-                                            capture=output,
-                                        )
-                                    )
-                            runtime.controller.stop_segment(presentation_id, "completed")
+                            present_gesture(gesture, trial, activation)
                     finally:
                         runtime.controller.stop_segment(
                             trial_id, "completed" if not cancel.is_set() else "aborted"
@@ -348,15 +441,39 @@ class WorkflowCoordinator:
     ) -> None:
         self.sgt = sgt or SGTService()
         self.training = training or TrainingService()
-        self._lock = threading.Lock()
+        # A Condition (rather than a plain Lock) lets SSE clients block until the
+        # status actually changes instead of polling on a fixed interval.
+        self._lock = threading.Condition()
         self._status: JobStatus | None = None
+        self._version = 0
         self._thread: threading.Thread | None = None
         self._cancel = threading.Event()
+        self._sgt_gate: SGTCommandGate | None = None
 
     @property
     def status(self) -> JobStatus | None:
         with self._lock:
             return self._status
+
+    def _notify(self) -> None:
+        """Bump the status version and wake waiters. Caller must hold ``_lock``."""
+        self._version += 1
+        self._lock.notify_all()
+
+    def status_snapshot(self) -> tuple[JobStatus | None, int]:
+        """Return the current status together with its monotonic version."""
+        with self._lock:
+            return self._status, self._version
+
+    def status_since(self, version: int, timeout: float) -> tuple[JobStatus | None, int]:
+        """Block until the status advances past ``version`` (or ``timeout`` elapses).
+
+        Returns the latest status and version so callers push updates only when
+        something changed, replacing busy polling of :attr:`status`.
+        """
+        with self._lock:
+            self._lock.wait_for(lambda: self._version != version, timeout)
+            return self._status, self._version
 
     def _begin(self, kind: str, target: Callable[[], str]) -> JobStatus:
         with self._lock:
@@ -364,6 +481,7 @@ class WorkflowCoordinator:
                 raise BusyError("another hardware-owning operation is active")
             status = JobStatus(uuid.uuid4().hex, kind, JobState.RUNNING)
             self._status = status
+            self._notify()
             self._cancel.clear()
 
             def runner() -> None:
@@ -377,12 +495,16 @@ class WorkflowCoordinator:
                     final = replace(status, state=JobState.FAILED, message=str(exc))
                 with self._lock:
                     self._status = final
+                    self._notify()
 
             self._thread = threading.Thread(target=runner, name=f"qgrip-{kind}", daemon=False)
             self._thread.start()
             return status
 
     def start_sgt(self, request: SGTRequest) -> JobStatus:
+        gate = SGTCommandGate()
+        self._sgt_gate = gate
+
         def update(value: SGTProgress) -> None:
             with self._lock:
                 if self._status:
@@ -398,9 +520,19 @@ class WorkflowCoordinator:
                         elapsed_seconds=value.elapsed_seconds,
                         duration_seconds=value.duration_seconds,
                         activation=value.activation,
+                        awaiting_command=value.awaiting_command,
                     )
+                    self._notify()
 
-        return self._begin("sgt", lambda: str(self.sgt.run(request, self._cancel, update)))
+        return self._begin("sgt", lambda: str(self.sgt.run(request, self._cancel, update, gate)))
+
+    def send_sgt_command(self, command: SGTCommand) -> None:
+        """Forward an interactive Screen Guided Training control command."""
+        if command == SGTCommand.ABORT:
+            self.cancel()
+        gate = self._sgt_gate
+        if gate is not None:
+            gate.send(command)
 
     def start_export(self, path: Path) -> JobStatus:
         return self._begin("export", lambda: str(export_capture(path)))
@@ -418,6 +550,7 @@ class WorkflowCoordinator:
                         message=f"epoch {value.epoch}/{request.profile.training.epochs}",
                         metrics=tuple(metrics),
                     )
+                    self._notify()
 
         return self._begin(
             "training", lambda: str(self.training.train(request, self._cancel, update))
@@ -451,6 +584,7 @@ class WorkflowCoordinator:
                         with self._lock:
                             if self._status:
                                 self._status = replace(self._status, health=health)
+                                self._notify()
                         self._cancel.wait(profile.inference.idle_poll_seconds)
                         continue
                     prediction = inference.predict(samples)
@@ -466,6 +600,7 @@ class WorkflowCoordinator:
                                     prediction=accepted,
                                     health=health,
                                 )
+                                self._notify()
                     next_inference_at += profile.inference.inference_period_seconds
                     if next_inference_at < time.monotonic():
                         next_inference_at = time.monotonic()
@@ -478,5 +613,8 @@ class WorkflowCoordinator:
 
     def close(self) -> None:
         self.cancel()
+        with self._lock:
+            # Wake any SSE waiters so they can observe the shutdown promptly.
+            self._notify()
         if self._thread is not None:
             self._thread.join(timeout=10)

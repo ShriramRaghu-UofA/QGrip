@@ -8,11 +8,19 @@ import pyarrow.parquet as pq
 from sifi_streamer.capture import CaptureLogWriter
 
 from qgrip.artifacts import export_capture, read_capture
-from qgrip.domain import JobState, ModelName, SGTProgress, SGTRequest, TrainingRequest
+from qgrip.domain import (
+    JobState,
+    ModelName,
+    SGTCommand,
+    SGTProgress,
+    SGTRequest,
+    TrainingRequest,
+)
 from qgrip.profiles import load_profile
 from qgrip.workflows import (
     InferenceService,
     ProgressCallback,
+    SGTCommandGate,
     SGTService,
     TrainingService,
     WorkflowCoordinator,
@@ -128,6 +136,7 @@ class SyntheticWorkflowTests(unittest.TestCase):
                 request: SGTRequest,
                 cancel: threading.Event,
                 progress: ProgressCallback | None = None,
+                gate: object | None = None,
             ) -> Path:
                 assert progress is not None
                 progress(
@@ -158,3 +167,32 @@ class SyntheticWorkflowTests(unittest.TestCase):
                 self.assertEqual(coordinator.status.stimulus_image, "rest.png")
             finally:
                 coordinator.close()
+
+    def test_manual_sgt_gate_waits_and_supports_repeat(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            profile = load_profile(write_profile(Path(directory)))
+            gate = SGTCommandGate()
+            events: list[SGTProgress] = []
+            repeated = {"done": False}
+
+            def on_progress(value: SGTProgress) -> None:
+                events.append(value)
+                if value.awaiting_command:
+                    if not repeated["done"]:
+                        repeated["done"] = True
+                        gate.send(SGTCommand.REPEAT)
+                    else:
+                        gate.send(SGTCommand.RESUME)
+
+            capture = SGTService().run(
+                SGTRequest("s", profile, True, auto=False),
+                threading.Event(),
+                on_progress,
+                gate,
+            )
+            # Manual mode must pause for the operator after each stimulus.
+            self.assertTrue(any(item.awaiting_command for item in events))
+            self.assertTrue(repeated["done"])
+            # A repeated take is superseded, so the export still projects clean rows.
+            table = pq.read_table(export_capture(capture))
+            self.assertGreater(table.num_rows, 0)

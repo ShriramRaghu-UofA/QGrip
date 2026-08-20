@@ -203,6 +203,7 @@ class SGTRequest:
     subject: str
     profile: QGripProfile
     proportional: bool
+    auto: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,6 +220,7 @@ class SGTProgress:
     activation: float = 0.0
     capture: Path | None = None
     error: str | None = None
+    awaiting_command: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -309,3 +311,4 @@ class JobStatus:
     metrics: tuple[EpochMetric, ...] = field(default_factory=tuple)
     prediction: Prediction | None = None
     health: LiveSignalHealth | None = None
+    awaiting_command: bool = False

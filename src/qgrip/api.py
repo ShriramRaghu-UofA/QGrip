@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import secrets
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
@@ -10,13 +13,14 @@ from typing import Annotated
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from qgrip.artifacts import discover_artifacts
 from qgrip.domain import (
     JobState,
+    JobStatus,
     ModelName,
     QGripProfile,
     SGTCommand,
@@ -36,6 +40,10 @@ class WireModel(BaseModel):
 class SubjectWire(WireModel):
     subject: str = Field(min_length=1, max_length=128)
     discrete: bool = False
+
+
+class SGTWire(SubjectWire):
+    auto: bool = True
 
 
 class ExportWire(WireModel):
@@ -113,14 +121,15 @@ def create_app(
         return {"artifacts": [str(path) for path in discover_artifacts(current, subject)]}
 
     @app.post("/api/v1/sgt/start", dependencies=protected)
-    def start_sgt(body: SubjectWire) -> dict[str, object]:
-        return asdict(owner.start_sgt(SGTRequest(body.subject, current, not body.discrete)))
+    def start_sgt(body: SGTWire) -> dict[str, object]:
+        return asdict(
+            owner.start_sgt(SGTRequest(body.subject, current, not body.discrete, body.auto))
+        )
 
     @app.post("/api/v1/sgt/command", dependencies=protected)
     def command_sgt(command: SGTCommand) -> dict[str, object]:
-        if command == SGTCommand.ABORT:
-            owner.cancel()
-        return {"accepted": command == SGTCommand.ABORT, "command": command}
+        owner.send_sgt_command(command)
+        return {"accepted": True, "command": command}
 
     @app.get("/api/v1/sgt/status", dependencies=protected)
     @app.get("/api/v1/export/status", dependencies=protected)
@@ -128,6 +137,36 @@ def create_app(
     @app.get("/api/v1/inference/status", dependencies=protected)
     def status() -> dict[str, object]:
         return asdict(owner.status) if owner.status else {"state": JobState.IDLE}
+
+    def _status_payload(status: JobStatus | None) -> str:
+        snapshot = asdict(status) if status else {"state": JobState.IDLE}
+        return json.dumps(snapshot, default=str)
+
+    @app.get("/api/v1/stream", include_in_schema=False)
+    async def stream(request: Request, token: str | None = None) -> StreamingResponse:
+        # EventSource cannot send custom headers, so the launch token arrives as a query.
+        if not token or not secrets.compare_digest(token, launch_token):
+            raise HTTPException(401, "missing or invalid QGrip launch token")
+
+        async def events() -> AsyncIterator[bytes]:
+            # Push the current status immediately, then block until the
+            # coordinator signals a change instead of polling on a timer. The
+            # bounded wait lets us periodically notice client disconnects.
+            status, version = owner.status_snapshot()
+            last = _status_payload(status)
+            yield f"data: {last}\n\n".encode()
+            while not await request.is_disconnected():
+                status, version = await asyncio.to_thread(owner.status_since, version, 1.0)
+                payload = _status_payload(status)
+                if payload != last:
+                    last = payload
+                    yield f"data: {payload}\n\n".encode()
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @app.post("/api/v1/export/start", dependencies=protected)
     def start_export(body: ExportWire) -> dict[str, object]:

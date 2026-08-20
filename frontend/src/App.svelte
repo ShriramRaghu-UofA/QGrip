@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { ArtifactList, Bootstrap, JobStatus, Prediction } from './api';
+  import type { ArtifactList, Bootstrap, DoctorReport, JobStatus, Prediction } from './api';
   import { QGripApi } from './api';
   import MetricPlot from './MetricPlot.svelte';
   import StagePanel from './StagePanel.svelte';
@@ -22,19 +22,46 @@
   let predictionHistory = $state.raw<Prediction[]>([]);
   let error = $state('');
   let online = $state(true);
+
+  // Device readiness (Setup) — surfaced instead of a silent doctor call.
+  let doctor = $state.raw<DoctorReport | null>(null);
+  let checkingDevice = $state(false);
+
+  // Screen Guided Training state machine controls.
+  let autoMode = $state(true);
+  let stimulusFailed = $state(false);
+
+  // Transport: prefer server push (SSE), fall back to polling when unavailable.
+  let sseActive = $state(false);
+  let disposeStream: (() => void) | null = null;
   let polling: number | undefined;
   let statusPath = '/api/v1/training/status';
 
+  // Frontend-owned smooth countdown so pacing never depends on network jitter.
+  let localElapsed = $state(0);
+  let countdownTimer: number | undefined;
+  let phaseKey = '';
+
   const stageIndex = $derived(stages.indexOf(stage));
   const progress = $derived(Math.round((status.progress ?? 0) * 100));
+  const sgtRunning = $derived(status.kind === 'sgt' && status.state === 'running');
+  const awaiting = $derived(!!status.awaiting_command);
   const stimulusUrl = $derived(
     status.stimulus_image ? `/stimuli/${encodeURIComponent(status.stimulus_image)}` : ''
   );
-  const stimulusProgress = $derived(
-    status.duration_seconds
-      ? Math.min(100, Math.round((100 * (status.elapsed_seconds ?? 0)) / status.duration_seconds))
-      : 0
+  const gestureLabel = $derived((status.gesture ?? '').replace(/_/g, ' '));
+  const duration = $derived(status.duration_seconds ?? 0);
+  const timedStage = $derived(
+    sgtRunning &&
+      !awaiting &&
+      duration > 0 &&
+      ['presentation', 'calibration', 'practice'].includes(status.stage ?? '')
   );
+  const countdownPercent = $derived(
+    duration > 0 ? Math.min(100, Math.round((100 * localElapsed) / duration)) : 0
+  );
+  const countdownRemaining = $derived(Math.max(0, duration - localElapsed));
+
   const token = new URLSearchParams(location.search).get('token') ?? '';
   const api = new QGripApi(token);
 
@@ -42,8 +69,62 @@
     theme = (localStorage.getItem('qgrip-theme') as Theme | null) ?? 'dracula';
     document.documentElement.dataset.theme = theme;
     void loadBootstrap();
-    return () => window.clearInterval(polling);
+    disposeStream = api.subscribe(
+      applyStatus,
+      () => (sseActive = false),
+      () => {
+        // The stream (re)connected: stop any fallback polling and prefer push.
+        sseActive = true;
+        window.clearInterval(polling);
+      }
+    );
+    sseActive = disposeStream !== null;
+    return () => {
+      disposeStream?.();
+      window.clearInterval(polling);
+      stopCountdown();
+    };
   });
+
+  // Drive the countdown locally whenever a new timed stimulus begins.
+  $effect(() => {
+    const key = `${status.kind}|${status.stage}|${status.gesture}|${status.progress}`;
+    if (timedStage) {
+      if (key !== phaseKey) {
+        phaseKey = key;
+        startCountdown(duration);
+      }
+    } else {
+      phaseKey = '';
+      stopCountdown();
+    }
+  });
+
+  // Reset the broken-image fallback whenever the stimulus changes.
+  $effect(() => {
+    void stimulusUrl;
+    stimulusFailed = false;
+  });
+
+  function startCountdown(seconds: number): void {
+    stopCountdown();
+    localElapsed = 0;
+    const started = performance.now();
+    countdownTimer = window.setInterval(() => {
+      localElapsed = (performance.now() - started) / 1000;
+      if (localElapsed >= seconds) {
+        localElapsed = seconds;
+        stopCountdown();
+      }
+    }, 50);
+  }
+
+  function stopCountdown(): void {
+    if (countdownTimer !== undefined) {
+      window.clearInterval(countdownTimer);
+      countdownTimer = undefined;
+    }
+  }
 
   function chooseTheme(value: Theme): void {
     theme = value;
@@ -63,19 +144,57 @@
   }
 
   async function loadArtifacts(): Promise<void> {
-    const response = await api.request<ArtifactList>(`/api/v1/artifacts?subject=${encodeURIComponent(subject)}`);
+    const response = await api.request<ArtifactList>(
+      `/api/v1/artifacts?subject=${encodeURIComponent(subject)}`
+    );
     artifacts = response.artifacts ?? [];
     trainingInput ||= artifacts.find((path) => path.endsWith('.parquet')) ?? '';
     modelPath ||= artifacts.find((path) => path.endsWith('.pt')) ?? '';
   }
 
+  async function checkDevice(): Promise<void> {
+    checkingDevice = true;
+    doctor = null;
+    try {
+      doctor = await api.request<DoctorReport>('/api/v1/doctor');
+      error = '';
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : String(cause);
+    } finally {
+      checkingDevice = false;
+    }
+  }
+
+  function applyStatus(next: JobStatus): void {
+    const wasRunning = status.state === 'running';
+    status = next;
+    if (next.prediction) {
+      predictionHistory = [...predictionHistory.slice(-79), next.prediction];
+    }
+    if (next.state !== 'running') {
+      if (!sseActive) window.clearInterval(polling);
+      if (wasRunning) {
+        if (next.kind === 'sgt' && next.result) capturePath = next.result;
+        if (next.kind === 'export' && next.result) trainingInput = next.result;
+        if (next.kind === 'training' && next.result) modelPath = next.result;
+        void loadArtifacts();
+      }
+    }
+  }
+
   async function start(path: string, body: object, nextStatusPath: string): Promise<void> {
     try {
-      status = await api.request<JobStatus>(path, { method: 'POST', body: JSON.stringify(body) });
+      const initial = await api.request<JobStatus>(path, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      applyStatus(initial);
       statusPath = nextStatusPath;
       error = '';
-      window.clearInterval(polling);
-      polling = window.setInterval(() => void poll(), 500);
+      if (!sseActive) {
+        window.clearInterval(polling);
+        polling = window.setInterval(() => void poll(), 500);
+      }
     } catch (cause) {
       error = cause instanceof Error ? cause.message : String(cause);
     }
@@ -83,25 +202,22 @@
 
   async function poll(): Promise<void> {
     try {
-      status = await api.request<JobStatus>(statusPath);
-      if (status.prediction) {
-        predictionHistory = [...predictionHistory.slice(-79), status.prediction];
-      }
-      if (status.state !== 'running') {
-        window.clearInterval(polling);
-        if (status.kind === 'sgt' && status.result) capturePath = status.result;
-        if (status.kind === 'export' && status.result) trainingInput = status.result;
-        if (status.kind === 'training' && status.result) modelPath = status.result;
-        await loadArtifacts();
-      }
+      applyStatus(await api.request<JobStatus>(statusPath));
     } catch (cause) {
       error = cause instanceof Error ? cause.message : String(cause);
     }
   }
 
+  function startCollection(): void {
+    predictionHistory = [];
+    void start('/api/v1/sgt/start', { subject, discrete: false, auto: autoMode }, '/api/v1/sgt/status');
+  }
+
   function handleKeys(event: KeyboardEvent): void {
-    if (event.altKey && event.key === 'ArrowRight') stage = stages[Math.min(stages.length - 1, stageIndex + 1)];
-    if (event.altKey && event.key === 'ArrowLeft') stage = stages[Math.max(0, stageIndex - 1)];
+    if (event.altKey && event.key === 'ArrowRight')
+      stage = stages[Math.min(stages.length - 1, stageIndex + 1)];
+    if (event.altKey && event.key === 'ArrowLeft')
+      stage = stages[Math.max(0, stageIndex - 1)];
   }
 </script>
 
@@ -114,7 +230,12 @@
       <div class="grid size-10 place-items-center rounded-xl bg-primary font-black text-primary-content">Q</div>
       <div><h1 class="text-xl font-bold">QGrip</h1><p class="text-xs opacity-60">EMG workflow console</p></div>
     </div>
-    <div class="flex-none gap-2">
+    <div class="flex-none items-center gap-2">
+      {#if doctor}
+        <span class="badge badge-success gap-1">Device ready</span>
+      {:else}
+        <span class="badge badge-ghost">Device unverified</span>
+      {/if}
       <span class={['badge', online ? 'badge-success' : 'badge-error']}>{online ? 'Online' : 'Offline'}</span>
       <select class="select select-sm" aria-label="Theme" value={theme} onchange={(event) => chooseTheme(event.currentTarget.value as Theme)}>
         <option value="dracula">Dracula</option><option value="nord">Nord</option><option value="light">Light</option>
@@ -139,21 +260,96 @@
       <div class="sr-only" aria-live="polite">{status.state}: {status.message ?? ''}</div>
 
       {#if stage === 'Setup'}
-        <StagePanel title="Setup" description="Choose a subject, validate the profile, and confirm device readiness." active>
+        <StagePanel title="Setup" description="Review the profile, connect the device, and confirm readiness before collecting." active>
           <fieldset class="fieldset"><legend class="fieldset-legend">Subject</legend><input class="input w-full" bind:value={subject} autocomplete="off" /></fieldset>
-          <div class="stats stats-vertical bg-base-300 sm:stats-horizontal"><div class="stat"><div class="stat-title">Device</div><div class="stat-value text-xl">{bootstrap?.device ?? 'Loading…'}</div></div><div class="stat"><div class="stat-title">Profile</div><div class="stat-desc max-w-72 truncate">{bootstrap?.profile ?? '—'}</div></div></div>
-          <div class="card-actions justify-end"><button class="btn btn-primary" onclick={() => void api.request('/api/v1/doctor').catch((cause) => (error = String(cause)))}>Check readiness</button><button class="btn" onclick={() => { void loadArtifacts(); stage = 'Collect'; }}>Continue</button></div>
+          <div class="stats stats-vertical bg-base-300 sm:stats-horizontal">
+            <div class="stat"><div class="stat-title">Device</div><div class="stat-value text-xl">{bootstrap?.device ?? 'Loading…'}</div></div>
+            <div class="stat"><div class="stat-title">Profile</div><div class="stat-desc max-w-72 truncate">{bootstrap?.profile ?? '—'}</div></div>
+            <div class="stat"><div class="stat-title">Gestures</div><div class="stat-value text-xl">{bootstrap?.gestures.length ?? 0}</div></div>
+          </div>
+          {#if bootstrap?.gestures.length}
+            <div class="flex flex-wrap gap-2">{#each bootstrap.gestures as item (item)}<span class="badge badge-outline">{item.replace(/_/g, ' ')}</span>{/each}</div>
+          {/if}
+          <div class="card border border-base-300 bg-base-100">
+            <div class="card-body gap-3">
+              <div class="flex items-center justify-between">
+                <h3 class="font-semibold">Device readiness</h3>
+                <button class="btn btn-primary btn-sm" disabled={checkingDevice} onclick={() => void checkDevice()}>
+                  {#if checkingDevice}<span class="loading loading-spinner loading-xs"></span> Checking…{:else}Connect device{/if}
+                </button>
+              </div>
+              {#if doctor}
+                <div class="stats bg-base-300">
+                  <div class="stat"><div class="stat-title">Status</div><div class="stat-value text-success text-xl">Ready</div><div class="stat-desc">{doctor.kind}</div></div>
+                  <div class="stat"><div class="stat-title">Sample rate</div><div class="stat-value text-xl">{doctor.sample_rate_hz} Hz</div></div>
+                  <div class="stat"><div class="stat-title">Channels</div><div class="stat-value text-xl">{doctor.channels}</div></div>
+                </div>
+              {:else}
+                <p class="text-sm text-base-content/70">Connect to verify the EMG stream through the same worker path used during capture.</p>
+              {/if}
+            </div>
+          </div>
+          <div class="card-actions justify-end"><button class="btn btn-primary" onclick={() => { void loadArtifacts(); stage = 'Collect'; }}>Continue</button></div>
         </StagePanel>
       {:else if stage === 'Collect'}
-        <StagePanel title="Collect" description="Backend timing and markers drive calibration, practice, and gesture trials." active>
-          <div class="space-y-5 text-center">
-            <div><div class="badge badge-primary badge-outline mb-2">{status.stage ?? 'Ready'}</div><h2 class="text-2xl font-bold">{(status.instruction ?? status.message) || 'Ready to begin collection.'}</h2></div>
-            {#if stimulusUrl}<img class="mx-auto max-h-96 rounded-box object-contain" src={stimulusUrl} alt={`Gesture: ${status.gesture ?? ''}`} />{:else if status.gesture}<div class="rounded-box border border-base-300 p-12 text-6xl font-black">{status.gesture}</div>{/if}
-            <div class="space-y-2 text-left"><div class="flex justify-between text-sm"><span>Current stimulus</span><span>{stimulusProgress}%</span></div><progress class="progress progress-accent w-full" value={stimulusProgress} max="100"></progress><div class="flex justify-between text-sm text-base-content/70"><span>{(status.elapsed_seconds ?? 0).toFixed(1)} s elapsed</span><span>{(status.duration_seconds ?? 0).toFixed(1)} s</span></div></div>
-            <div class="space-y-2 text-left"><div class="flex justify-between text-sm"><span>Collection progress</span><span>{progress}%</span></div><progress class="progress progress-primary w-full" value={progress} max="100"></progress>{#if status.stage === 'presentation'}<p class="text-sm text-base-content/70">Activation target: {Math.round((status.activation ?? 0) * 100)}%</p>{/if}</div>
+        <StagePanel title="Collect" description="Follow each prompt. Auto mode paces you automatically; manual mode waits for you after every stimulus." active>
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <label class="label cursor-pointer gap-3">
+              <span class={['label-text', !autoMode && 'font-semibold']}>Manual</span>
+              <input type="checkbox" class="toggle toggle-primary" bind:checked={autoMode} disabled={sgtRunning} aria-label="Auto advance" />
+              <span class={['label-text', autoMode && 'font-semibold']}>Auto</span>
+            </label>
+            <span class="badge badge-primary badge-outline">{awaiting ? 'Waiting for you' : (status.stage ?? (sgtRunning ? 'Running' : 'Ready'))}</span>
           </div>
+
+          <div class="rounded-box border border-base-300 bg-base-200 p-6 text-center">
+            <h2 class="mb-4 text-2xl font-bold">{(status.instruction ?? status.message) || 'Ready to begin collection.'}</h2>
+            <div class="grid min-h-64 place-items-center">
+              {#if awaiting}
+                <div class="space-y-1"><div class="text-5xl">✓</div><p class="text-base-content/70">Stimulus recorded — repeat it or proceed to the next.</p></div>
+              {:else if stimulusUrl && !stimulusFailed}
+                <img class="max-h-80 rounded-box object-contain" src={stimulusUrl} alt={`Gesture: ${gestureLabel}`} onerror={() => (stimulusFailed = true)} />
+              {:else if status.gesture}
+                <div class="rounded-box border border-base-300 px-12 py-10 text-5xl font-black capitalize">{gestureLabel}</div>
+              {:else}
+                <p class="text-base-content/60">Press start to begin the guided session.</p>
+              {/if}
+            </div>
+
+            {#if sgtRunning && !awaiting && duration > 0}
+              <div class="mt-6 space-y-1 text-left">
+                <div class="flex justify-between text-sm"><span>Hold the gesture</span><span>{countdownRemaining.toFixed(1)} s</span></div>
+                <progress class="progress progress-accent w-full" value={countdownPercent} max="100"></progress>
+              </div>
+            {/if}
+          </div>
+
+          <div class="space-y-1 text-left">
+            <div class="flex justify-between text-sm"><span>Session progress</span><span>{progress}%</span></div>
+            <progress class="progress progress-primary w-full" value={progress} max="100"></progress>
+            {#if status.stage === 'presentation' && !awaiting}<p class="text-sm text-base-content/70">Activation target: {Math.round((status.activation ?? 0) * 100)}%</p>{/if}
+          </div>
+
           {#if capturePath}<div class="alert alert-success"><span>Capture saved: {capturePath}</span></div>{/if}
-          <div class="card-actions justify-end"><button class="btn btn-error btn-outline" onclick={() => void api.request('/api/v1/sgt/command?command=abort', { method: 'POST' })}>Abort</button>{#if capturePath}<button class="btn btn-secondary" onclick={() => void start('/api/v1/export/start', { capture: capturePath }, '/api/v1/export/status')}>Export Parquet</button>{/if}<button class="btn btn-primary" onclick={() => void start('/api/v1/sgt/start', { subject, discrete: false }, '/api/v1/sgt/status')}>Start collection</button></div>
+
+          <div class="card-actions justify-between">
+            <div class="flex gap-2">
+              {#if capturePath}<button class="btn btn-secondary" onclick={() => void start('/api/v1/export/start', { capture: capturePath }, '/api/v1/export/status')}>Export Parquet</button>{/if}
+            </div>
+            <div class="flex gap-2">
+              {#if sgtRunning}
+                {#if awaiting}
+                  <button class="btn btn-warning" onclick={() => void api.sgtCommand('repeat')}>Repeat</button>
+                  <button class="btn btn-primary" onclick={() => void api.sgtCommand('resume')}>Proceed</button>
+                {:else}
+                  {#if autoMode}<button class="btn" onclick={() => void api.sgtCommand('pause')}>Pause</button>{/if}
+                  <button class="btn btn-error btn-outline" onclick={() => void api.sgtCommand('abort')}>Abort</button>
+                {/if}
+              {:else}
+                <button class="btn btn-primary" onclick={startCollection}>Start collection</button>
+              {/if}
+            </div>
+          </div>
         </StagePanel>
       {:else if stage === 'Train'}
         <StagePanel title="Train" description="Use the latest compatible session by default or explicitly combine sessions." active>
