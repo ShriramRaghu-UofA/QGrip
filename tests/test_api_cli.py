@@ -30,3 +30,13 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as exit_context:
             main(["--help"])
         self.assertEqual(exit_context.exception.code, 0)
+
+    def test_infer_defaults_to_live_with_an_explicit_once_mode(self) -> None:
+        from qgrip.cli import build_parser
+
+        live = build_parser().parse_args(["infer", "model.pt", "--profile", "profile.json"])
+        once = build_parser().parse_args(
+            ["infer", "model.pt", "--profile", "profile.json", "--once"]
+        )
+        self.assertFalse(live.once)
+        self.assertTrue(once.once)

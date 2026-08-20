@@ -83,6 +83,59 @@ Packaged templates for `synthetic`, `sifi`, `myo_ble`, and `myo_dongle` live in
 `src/qgrip/profile_templates`. Myo support uses the attributed PyoMyo source vendored
 from the reference acquisition repository; PyoMyo itself is not installed.
 
+## Profiles
+
+Profiles are the editable configuration boundary for QGrip. They compose device,
+acquisition, SGT, model, training, inference, dashboard, and optional Handi settings;
+the CLI, dashboard, and standalone Handi runtime use the same loaded profile. Create
+one from a template with `qgrip profile create`, then edit it before running a workflow.
+Each service reads only its own nested section: SGT reads `sgt` and `acquisition`,
+training reads `training` and `model`, and live inference/Handi read `inference` and
+`acquisition` alongside the device and model artifacts.
+
+The `training` section controls every training parameter. Its three timing settings
+are deliberately independent: `dataset_stride_seconds` controls overlap between
+training examples, `stft_hop_samples` controls STFT frame overlap, and
+`inference_period_seconds` in the separate `inference` section controls live output
+rate.
+
+```json
+{
+  "training": {
+    "epochs": 30,
+    "batch_size": 128,
+    "learning_rate": 0.0001,
+    "validation_fraction": 0.2,
+    "training_window_seconds": 1.0,
+    "dataset_stride_seconds": 0.005,
+    "stft_n_fft": null,
+    "stft_hop_samples": null,
+    "activation_loss_weight": 1.0,
+    "weight_decay": 0.0001,
+    "normalization": "dataset_standardize",
+    "seed": 42,
+    "export_onnx": true
+  }
+}
+```
+
+Set `stft_n_fft` and `stft_hop_samples` together to override QGrip's sample-rate
+dependent STFT defaults; use `null` for automatic selection. `normalization` is
+`signed_8bit` for Myo profiles and `dataset_standardize` for SiFi and other devices;
+the latter fits statistics from the training split for proportional and discrete models.
+Profile validation
+rejects unknown keys and invalid ranges before capture, training, inference, or Handi
+control begins.
+
+`acquisition` is the shared `sifi-streamer` policy: shared-buffer duration, worker
+acknowledgement timeout, capture flush/compression/durability behavior, and nested
+signal-health thresholds. `model.architecture` accepts only parameters for the selected
+model (for example, Transformer `d_model`, `nhead`, `dim_feedforward`, and `dropout`).
+`inference` owns output cadence, confidence/debounce policy, and its short cooperative
+waits. `dashboard.handi_timeout_seconds` controls only the optional Handi health and
+calibration HTTP proxy. The shipped templates spell out all of these values so profiles
+are self-contained and safe to modify.
+
 ## Standalone Handi
 
 ```powershell

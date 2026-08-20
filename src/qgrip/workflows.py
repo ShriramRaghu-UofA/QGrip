@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import threading
 import time
 import uuid
@@ -11,20 +10,18 @@ from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import numpy as np
+from sifi_streamer.acquisition import create_capture_runtime
 
 from qgrip.artifacts import (
     export_capture,
     new_capture_path,
-    write_capture_header,
 )
-from qgrip.devices import SignalDevice, create_device
 from qgrip.domain import (
-    ArtifactMetadata,
-    DeviceConfig,
     EpochMetric,
+    JobState,
     JobStatus,
     Prediction,
     QGripProfile,
@@ -33,145 +30,147 @@ from qgrip.domain import (
     TrainingRequest,
 )
 from qgrip.errors import ArtifactError, BusyError
+from qgrip.streaming import (
+    LiveEMGSession,
+    PredictionDebouncer,
+    sample_rates_match,
+    streamer_config,
+    streamer_device_factory,
+)
 
 ProgressCallback = Callable[[SGTProgress], None]
 
 
 class SGTService:
-    def __init__(
-        self,
-        device_factory: Callable[[DeviceConfig], SignalDevice] = create_device,
-        clock: Callable[[], float] = time.monotonic,
-        sleeper: Callable[[float], None] = time.sleep,
-    ) -> None:
-        self._device_factory = device_factory
-        self._clock = clock
-        self._sleep = sleeper
-
     def run(
         self, request: SGTRequest, cancel: threading.Event, progress: ProgressCallback | None = None
     ) -> Path:
         profile = request.profile
         output = new_capture_path(profile, request.subject)
-        device = self._device_factory(profile.device)
         total = len(profile.sgt.gestures) * profile.sgt.trials
-        metadata = ArtifactMetadata(
+        runtime = create_capture_runtime(
             output,
-            "capture",
-            request.subject,
-            datetime.now(UTC).isoformat(),
-            profile.device.kind,
-            profile.device.sample_rate_hz,
-            profile.device.channels,
-            profile.sgt.gestures,
-            request.proportional,
+            output.stem,
+            streamer_device_factory(profile.device),
+            {
+                "experiment": "screen_guided_training",
+                "subject": request.subject,
+                "created_at": datetime.now(UTC).isoformat(),
+                "device": profile.device.kind,
+                "sample_rate_hz": profile.device.sample_rate_hz,
+                "channels": profile.device.channels,
+                "classes": ",".join(profile.sgt.gestures),
+                "proportional": request.proportional,
+            },
+            config=streamer_config(profile.acquisition),
         )
-        completed = False
+        reason = "aborted"
         try:
-            device.connect()
-            with output.open("x", encoding="utf-8") as stream:
-                write_capture_header(stream, metadata)
-                trial_number = 0
-                for trial in range(1, profile.sgt.trials + 1):
-                    for gesture in profile.sgt.gestures:
-                        if cancel.is_set():
-                            raise InterruptedError("capture cancelled")
-                        trial_number += 1
-                        started = self._clock()
-                        activation = (
-                            0.0
-                            if gesture == "rest"
-                            else (trial / profile.sgt.trials if request.proportional else 1.0)
+            with runtime.controller:
+                segment_sequence = 0
+                recorded_presentation = 0
+
+                def run_unrecorded_stage(kind: str, gesture: str) -> None:
+                    """Capture calibration/practice evidence without training labels."""
+                    nonlocal segment_sequence
+                    segment_sequence += 1
+                    stage_id = f"{kind}-{segment_sequence:03d}"
+                    runtime.controller.start_segment(stage_id, kind, label=gesture)
+                    runtime.controller.marker(stage_id, f"{kind}_started", label=gesture)
+                    started = time.monotonic()
+                    try:
+                        while (
+                            elapsed := time.monotonic() - started
+                        ) < profile.sgt.duration_seconds:
+                            if cancel.wait(
+                                min(
+                                    profile.sgt.progress_interval_seconds,
+                                    profile.sgt.duration_seconds - elapsed,
+                                )
+                            ):
+                                raise InterruptedError("capture cancelled")
+                    finally:
+                        runtime.controller.stop_segment(
+                            stage_id, "completed" if not cancel.is_set() else "aborted"
                         )
-                        device.set_cue(gesture, activation)
-                        if progress:
-                            progress(
-                                SGTProgress(
-                                    "running",
-                                    gesture,
-                                    trial_number,
-                                    total,
-                                    0,
-                                    activation,
-                                    output,
-                                )
-                            )
-                        remaining = profile.sgt.duration_seconds
-                        while remaining > 0:
-                            count = max(
-                                1, min(int(device.sample_rate_hz * min(remaining, 0.25)), 256)
-                            )
-                            packet = device.read(count)
-                            stream.write(
-                                json.dumps(
-                                    {
-                                        "packet_type": "signal",
-                                        "gesture": gesture,
-                                        "trial": trial,
-                                        "sequence": trial_number,
-                                        "activation": activation,
-                                        "timestamp": packet.timestamp,
-                                        "samples": packet.samples,
-                                    }
-                                )
-                                + "\n"
-                            )
-                            elapsed = self._clock() - started
-                            remaining = profile.sgt.duration_seconds - elapsed
-                            if progress:
-                                progress(
-                                    SGTProgress(
-                                        "running",
-                                        gesture,
-                                        trial_number,
-                                        total,
-                                        elapsed,
-                                        activation,
-                                        output,
-                                    )
-                                )
-                            if profile.device.kind == "synthetic":
-                                self._sleep(min(0.01, max(0, remaining)))
-                completed = True
-            if progress:
-                progress(SGTProgress("completed", total_trials=total, capture=output))
-            return output
-        finally:
-            device.close()
-            if output.exists() and not completed:
-                # Preserve partial authoritative data and mark it incomplete.
-                lines = output.read_text(encoding="utf-8").splitlines()
-                if lines:
-                    header = json.loads(lines[0])
-                    header["complete"] = False
-                    output.write_text(
-                        "\n".join([json.dumps(header), *lines[1:]]) + "\n", encoding="utf-8"
+
+                if request.proportional and profile.sgt.activation_calibration:
+                    for gesture in profile.sgt.gestures:
+                        run_unrecorded_stage("calibration", gesture)
+                if profile.sgt.practice:
+                    for gesture in profile.sgt.gestures:
+                        run_unrecorded_stage("practice", gesture)
+                for trial in range(1, profile.sgt.trials + 1):
+                    trial_id = runtime.controller.start_segment(
+                        f"trial-{trial:03d}", "trial", trial=trial
                     )
+                    try:
+                        for gesture in profile.sgt.gestures:
+                            if cancel.is_set():
+                                raise InterruptedError("capture cancelled")
+                            segment_sequence += 1
+                            recorded_presentation += 1
+                            activation = (
+                                0.0
+                                if gesture == "rest"
+                                else (trial / profile.sgt.trials if request.proportional else 1.0)
+                            )
+                            presentation_id = runtime.controller.start_segment(
+                                f"presentation-{trial:03d}-{segment_sequence:03d}",
+                                "presentation",
+                                label=gesture,
+                                trial=trial,
+                                activation=activation,
+                            )
+                            runtime.controller.marker(
+                                presentation_id,
+                                "activation_target",
+                                label=gesture,
+                                activation=activation,
+                            )
+                            started = time.monotonic()
+                            while (
+                                elapsed := time.monotonic() - started
+                            ) < profile.sgt.duration_seconds:
+                                if cancel.wait(
+                                    min(
+                                        profile.sgt.progress_interval_seconds,
+                                        profile.sgt.duration_seconds - elapsed,
+                                    )
+                                ):
+                                    raise InterruptedError("capture cancelled")
+                                if progress:
+                                    progress(
+                                        SGTProgress(
+                                            JobState.RUNNING,
+                                            gesture,
+                                            recorded_presentation,
+                                            total,
+                                            elapsed,
+                                            activation,
+                                            output,
+                                        )
+                                    )
+                            runtime.controller.stop_segment(presentation_id, "completed")
+                    finally:
+                        runtime.controller.stop_segment(
+                            trial_id, "completed" if not cancel.is_set() else "aborted"
+                        )
+            reason = "normal_completion"
+        except InterruptedError:
+            raise
+        finally:
+            if runtime.controller.started:
+                runtime.controller.close(reason)
+        if progress:
+            progress(SGTProgress(JobState.COMPLETED, total_trials=total, capture=output))
+        return output
 
 
 class TrainingService:
     """Lazy facade keeping Torch optional until training is requested."""
 
     PRESET_VERSION = 1
-
-    def __init__(
-        self,
-        *,
-        epochs: int = 30,
-        batch_size: int = 128,
-        window_seconds: float = 1.0,
-        stride_seconds: float = 0.05,
-        export_onnx: bool = True,
-    ) -> None:
-        self._epochs = epochs
-        self._batch_size = batch_size
-        self._window_seconds = window_seconds
-        self._stride_seconds = stride_seconds
-        self._export_onnx = export_onnx
-
-    @property
-    def epochs(self) -> int:
-        return self._epochs
 
     def train(
         self,
@@ -180,20 +179,12 @@ class TrainingService:
         metric: Callable[[EpochMetric], None] | None = None,
     ) -> Path:
         try:
-            from qgrip.training import TorchTrainingService, TrainingOptions
+            from qgrip.training import TorchTrainingService
         except ImportError as exc:
             raise ArtifactError(
                 "training requires the qgrip train extra: uv sync --extra train"
             ) from exc
-        return TorchTrainingService(
-            TrainingOptions(
-                epochs=self._epochs,
-                batch_size=self._batch_size,
-                window_seconds=self._window_seconds,
-                stride_seconds=self._stride_seconds,
-                export_onnx=self._export_onnx,
-            )
-        ).train(request, cancel, metric)
+        return TorchTrainingService(request.profile.training).train(request, cancel, metric)
 
 
 class InferenceService:
@@ -307,19 +298,19 @@ class WorkflowCoordinator:
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
                 raise BusyError("another hardware-owning operation is active")
-            status = JobStatus(uuid.uuid4().hex, kind, "running")
+            status = JobStatus(uuid.uuid4().hex, kind, JobState.RUNNING)
             self._status = status
             self._cancel.clear()
 
             def runner() -> None:
                 try:
                     result = target()
-                    state = "cancelled" if self._cancel.is_set() else "completed"
-                    final = replace(status, state=cast(Any, state), progress=1.0, result=result)
+                    state = JobState.CANCELLED if self._cancel.is_set() else JobState.COMPLETED
+                    final = replace(status, state=state, progress=1.0, result=result)
                 except InterruptedError as exc:
-                    final = replace(status, state="cancelled", message=str(exc))
+                    final = replace(status, state=JobState.CANCELLED, message=str(exc))
                 except Exception as exc:
-                    final = replace(status, state="failed", message=str(exc))
+                    final = replace(status, state=JobState.FAILED, message=str(exc))
                 with self._lock:
                     self._status = final
 
@@ -350,8 +341,8 @@ class WorkflowCoordinator:
                 if self._status:
                     self._status = replace(
                         self._status,
-                        progress=value.epoch / self.training.epochs,
-                        message=f"epoch {value.epoch}/{self.training.epochs}",
+                        progress=value.epoch / request.profile.training.epochs,
+                        message=f"epoch {value.epoch}/{request.profile.training.epochs}",
                         metrics=tuple(metrics),
                     )
 
@@ -363,28 +354,49 @@ class WorkflowCoordinator:
         inference = InferenceService(model, profile.inference.backend)
 
         def run() -> str:
-            device = create_device(profile.device)
-            try:
-                device.connect()
+            with LiveEMGSession(profile.device, profile.acquisition) as session:
+                if session.channels != inference.channels:
+                    raise ArtifactError("model channel count does not match live EMG stream")
+                if not sample_rates_match(
+                    session.sample_rate_hz, float(inference.metadata["sample_rate_hz"])
+                ):
+                    raise ArtifactError("model sample rate does not match live EMG stream")
+                minimum_new_samples = max(
+                    1,
+                    round(session.sample_rate_hz * profile.inference.inference_period_seconds),
+                )
+                debouncer = PredictionDebouncer(profile.inference.switch_predictions)
+                next_inference_at = time.monotonic()
                 while not self._cancel.is_set():
-                    packet = device.read(
-                        max(1, int(device.sample_rate_hz * profile.inference.interval_seconds))
-                    )
-                    prediction = inference.predict(packet.samples)
+                    wait_seconds = next_inference_at - time.monotonic()
+                    if wait_seconds > 0:
+                        self._cancel.wait(min(wait_seconds, profile.inference.maximum_wait_seconds))
+                        continue
+                    samples = session.next_window(inference.window_size, minimum_new_samples)
+                    health = session.health
+                    if samples is None:
+                        with self._lock:
+                            if self._status:
+                                self._status = replace(self._status, health=health)
+                        self._cancel.wait(profile.inference.idle_poll_seconds)
+                        continue
+                    prediction = inference.predict(samples)
                     if prediction.confidence < profile.inference.confidence_gate:
                         prediction = replace(prediction, gesture="rest")
-                    with self._lock:
-                        if self._status:
-                            self._status = replace(
-                                self._status,
-                                message=prediction.gesture,
-                                prediction=prediction,
-                            )
-                    if profile.device.kind == "synthetic":
-                        time.sleep(profile.inference.interval_seconds)
+                    accepted = debouncer.accept(prediction)
+                    if accepted is not None:
+                        with self._lock:
+                            if self._status:
+                                self._status = replace(
+                                    self._status,
+                                    message=accepted.gesture,
+                                    prediction=accepted,
+                                    health=health,
+                                )
+                    next_inference_at += profile.inference.inference_period_seconds
+                    if next_inference_at < time.monotonic():
+                        next_inference_at = time.monotonic()
                 return str(model)
-            finally:
-                device.close()
 
         return self._begin("inference", run)
 

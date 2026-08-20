@@ -9,15 +9,15 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, cast
 
 import numpy as np
 import torch
 from torch import nn
 
-ModelName = Literal["transformer", "cnn1d", "cnn2d", "dense"]
-NormalizationMode = Literal["window_zscore", "signed_8bit", "dataset_standardize"]
-MODEL_NAMES: tuple[ModelName, ...] = ("transformer", "cnn1d", "cnn2d", "dense")
+from qgrip.domain import ModelName, NormalizationMode
+
+MODEL_NAMES: tuple[ModelName, ...] = tuple(ModelName)
 
 
 class EMGPreprocessor(nn.Module):
@@ -27,13 +27,13 @@ class EMGPreprocessor(nn.Module):
         self,
         n_fft: int,
         hop_length: int,
-        normalization: NormalizationMode,
+        normalization: NormalizationMode | str,
         n_channels: int,
     ) -> None:
         super().__init__()
         self.n_fft = n_fft
         self.hop_length = hop_length
-        self.normalization = normalization
+        self.normalization = NormalizationMode(normalization)
         self.n_channels = n_channels
         self.channel_mean: torch.Tensor = nn.Buffer(torch.zeros(n_channels))
         self.channel_scale: torch.Tensor = nn.Buffer(torch.ones(n_channels))
@@ -43,7 +43,7 @@ class EMGPreprocessor(nn.Module):
     @torch.no_grad()
     def adapt(self, batches: Iterable[torch.Tensor]) -> None:
         """Fit fixed per-channel statistics from training data."""
-        if self.normalization != "dataset_standardize":
+        if self.normalization != NormalizationMode.DATASET_STANDARDIZE:
             raise RuntimeError("adapt() requires dataset_standardize normalization")
         total = torch.zeros(self.n_channels, dtype=torch.float64)
         total_squared = torch.zeros(self.n_channels, dtype=torch.float64)
@@ -64,16 +64,16 @@ class EMGPreprocessor(nn.Module):
     def spectrogram(self, values: torch.Tensor) -> torch.Tensor:
         """Return ``(batch, channels, frequency, frames)`` magnitudes."""
         batch_size, samples, channels = values.shape
-        if self.normalization == "dataset_standardize":
+        if self.normalization == NormalizationMode.DATASET_STANDARDIZE:
             values = (values - self.channel_mean.view(1, 1, -1)) / self.channel_scale.view(1, 1, -1)
         signals = values.permute(0, 2, 1).reshape(batch_size * channels, samples)
-        if self.normalization == "window_zscore":
+        if self.normalization == NormalizationMode.WINDOW_ZSCORE:
             mean = signals.mean(dim=-1, keepdim=True)
             variance = signals.var(dim=-1, unbiased=False, keepdim=True)
             signals = (signals - mean) / torch.sqrt(variance + self._normalization_epsilon)
-        elif self.normalization == "signed_8bit":
+        elif self.normalization == NormalizationMode.SIGNED_8BIT:
             signals = signals / 128
-        elif self.normalization != "dataset_standardize":
+        elif self.normalization != NormalizationMode.DATASET_STANDARDIZE:
             raise ValueError(f"unsupported EMG normalization {self.normalization!r}")
         spectrum = torch.stft(
             signals,
@@ -102,7 +102,7 @@ class BaseEMGClassifier(nn.Module):
         n_channels: int,
         n_fft: int,
         hop_length: int,
-        normalization: NormalizationMode,
+        normalization: NormalizationMode | str,
         predict_activation: bool,
     ) -> None:
         super().__init__()
@@ -110,16 +110,16 @@ class BaseEMGClassifier(nn.Module):
         self.n_channels = n_channels
         self.n_fft = n_fft
         self.hop_length = hop_length
-        self.normalization = normalization
+        self.normalization = NormalizationMode(normalization)
         self.predict_activation = predict_activation
-        self.preprocessor = EMGPreprocessor(n_fft, hop_length, normalization, n_channels)
+        self.preprocessor = EMGPreprocessor(n_fft, hop_length, self.normalization, n_channels)
         self._model_config: dict[str, Any] = {
             "n_classes": n_classes,
             "window_size": window_size,
             "n_channels": n_channels,
             "n_fft": n_fft,
             "hop_length": hop_length,
-            "normalization": normalization,
+            "normalization": self.normalization.value,
             "predict_activation": predict_activation,
         }
 
@@ -268,17 +268,19 @@ class DenseEMGClassifier(BaseEMGClassifier):
 
 
 MODEL_CLASSES: dict[ModelName, type[BaseEMGClassifier]] = {
-    "transformer": TransformerEMGClassifier,
-    "cnn1d": CNN1DEMGClassifier,
-    "cnn2d": CNN2DEMGClassifier,
-    "dense": DenseEMGClassifier,
+    ModelName.TRANSFORMER: TransformerEMGClassifier,
+    ModelName.CNN1D: CNN1DEMGClassifier,
+    ModelName.CNN2D: CNN2DEMGClassifier,
+    ModelName.DENSE: DenseEMGClassifier,
 }
 
 
 def create_model(model_name: ModelName | str, **config: Any) -> BaseEMGClassifier:
-    if model_name not in MODEL_CLASSES:
-        raise ValueError(f"unknown model {model_name!r}; choose from {MODEL_NAMES}")
-    return MODEL_CLASSES[model_name](**config)
+    try:
+        resolved_name = ModelName(model_name)
+    except ValueError as exc:
+        raise ValueError(f"unknown model {model_name!r}; choose from {MODEL_NAMES}") from exc
+    return MODEL_CLASSES[resolved_name](**config)
 
 
 def load_checkpoint(path: str | Path, device: torch.device | str = "cpu") -> dict[str, Any]:
@@ -286,13 +288,15 @@ def load_checkpoint(path: str | Path, device: torch.device | str = "cpu") -> dic
 
 
 def checkpoint_model_config(checkpoint: Mapping[str, Any]) -> tuple[ModelName, dict[str, Any]]:
-    model_name = checkpoint.get("model_name")
-    if model_name not in MODEL_CLASSES:
-        raise ValueError(f"checkpoint has unsupported model_name {model_name!r}")
+    raw_model_name = checkpoint.get("model_name")
+    try:
+        model_name = ModelName(raw_model_name)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"checkpoint has unsupported model_name {raw_model_name!r}") from exc
     config = checkpoint.get("model_config")
     if not isinstance(config, Mapping):
         raise ValueError("checkpoint has no model_config")
-    return cast(ModelName, model_name), dict(cast(Mapping[str, Any], config))
+    return model_name, dict(cast(Mapping[str, Any], config))
 
 
 def load_model_checkpoint(

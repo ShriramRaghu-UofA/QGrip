@@ -7,26 +7,31 @@ import math
 import os
 import tempfile
 from dataclasses import asdict
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, cast
 
 from qgrip.domain import (
+    AcquisitionConfig,
     DashboardConfig,
     DeviceConfig,
+    DeviceKind,
     GripPreset,
     HandiConfig,
+    HealthConfig,
+    InferenceBackend,
     InferenceConfig,
     JointLimit,
     ModelConfig,
+    ModelName,
+    NormalizationMode,
     QGripProfile,
     SGTConfig,
+    TrainingConfig,
 )
 from qgrip.errors import ValidationError
 
 SCHEMA_VERSION = 1
-DEVICE_KINDS = {"sifi", "myo_ble", "myo_dongle", "synthetic"}
-MODEL_NAMES = {"transformer", "cnn1d", "cnn2d", "dense"}
-BACKENDS = {"auto", "torch", "onnx"}
 
 
 def _object(value: object, name: str) -> dict[str, object]:
@@ -56,10 +61,32 @@ def _integer(value: object, name: str, *, minimum: int = 0) -> int:
     return value
 
 
+def _optional_integer(value: object, name: str, *, minimum: int) -> int | None:
+    return None if value is None else _integer(value, name, minimum=minimum)
+
+
+def _optional_finite(value: object, name: str, *, positive: bool = False) -> float | None:
+    return None if value is None else _finite(value, name, positive=positive)
+
+
+def _boolean(value: object, name: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValidationError(f"{name} must be a boolean")
+    return value
+
+
 def _string(value: object, name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValidationError(f"{name} must be a non-empty string")
     return value.strip()
+
+
+def _enum[EnumValue: StrEnum](value: object, enum: type[EnumValue], name: str) -> EnumValue:
+    text = _string(value, name)
+    try:
+        return enum(text)
+    except ValueError as exc:
+        raise ValidationError(f"unsupported {name}: {text}") from exc
 
 
 def _optional_string(value: object, name: str) -> str | None:
@@ -74,9 +101,7 @@ def _resolve(base: Path, value: object, name: str) -> Path:
 def _parse_device(raw: object) -> DeviceConfig:
     data = _object(raw, "device")
     _only(data, {"kind", "sample_rate_hz", "channels", "address", "port", "seed"}, "device")
-    kind = _string(data.get("kind", "synthetic"), "device.kind")
-    if kind not in DEVICE_KINDS:
-        raise ValidationError(f"unsupported device.kind: {kind}")
+    kind = _enum(data.get("kind", DeviceKind.SYNTHETIC), DeviceKind, "device.kind")
     address = _optional_string(data.get("address"), "device.address")
     port = _optional_string(data.get("port"), "device.port")
     if kind == "myo_ble" and port is not None:
@@ -84,7 +109,7 @@ def _parse_device(raw: object) -> DeviceConfig:
     if kind == "myo_dongle" and address is not None:
         raise ValidationError("myo_dongle cannot define device.address")
     return DeviceConfig(
-        kind=cast(Any, kind),
+        kind=kind,
         sample_rate_hz=_finite(
             data.get("sample_rate_hz", 200), "device.sample_rate_hz", positive=True
         ),
@@ -92,6 +117,92 @@ def _parse_device(raw: object) -> DeviceConfig:
         address=address,
         port=port,
         seed=_integer(data.get("seed", 7), "device.seed"),
+    )
+
+
+def _parse_acquisition(raw: object) -> AcquisitionConfig:
+    data = _object(raw, "acquisition")
+    _only(
+        data,
+        {
+            "ring_buffer_seconds",
+            "ack_timeout_seconds",
+            "capture_log_enabled",
+            "capture_frame_target_bytes",
+            "capture_flush_interval_seconds",
+            "capture_compression_level",
+            "capture_fsync_on_boundary",
+            "health",
+        },
+        "acquisition",
+    )
+    health_data = _object(data.get("health", {}), "acquisition.health")
+    _only(
+        health_data,
+        {
+            "window_seconds",
+            "stale_after_seconds",
+            "minimum_rate_ratio",
+            "maximum_rate_ratio",
+            "maximum_missing_fraction",
+            "maximum_lost_samples",
+        },
+        "acquisition.health",
+    )
+    health = HealthConfig(
+        window_seconds=_finite(
+            health_data.get("window_seconds", 5), "acquisition.health.window_seconds", positive=True
+        ),
+        stale_after_seconds=_optional_finite(
+            health_data.get("stale_after_seconds", 2),
+            "acquisition.health.stale_after_seconds",
+            positive=True,
+        ),
+        minimum_rate_ratio=_optional_finite(
+            health_data.get("minimum_rate_ratio", 0.9), "acquisition.health.minimum_rate_ratio"
+        ),
+        maximum_rate_ratio=_optional_finite(
+            health_data.get("maximum_rate_ratio", 1.1), "acquisition.health.maximum_rate_ratio"
+        ),
+        maximum_missing_fraction=_optional_finite(
+            health_data.get("maximum_missing_fraction", 0),
+            "acquisition.health.maximum_missing_fraction",
+        ),
+        maximum_lost_samples=_optional_integer(
+            health_data.get("maximum_lost_samples", 0),
+            "acquisition.health.maximum_lost_samples",
+            minimum=0,
+        ),
+    )
+    return AcquisitionConfig(
+        ring_buffer_seconds=_finite(
+            data.get("ring_buffer_seconds", 10), "acquisition.ring_buffer_seconds", positive=True
+        ),
+        ack_timeout_seconds=_finite(
+            data.get("ack_timeout_seconds", 2), "acquisition.ack_timeout_seconds", positive=True
+        ),
+        capture_log_enabled=_boolean(
+            data.get("capture_log_enabled", True), "acquisition.capture_log_enabled"
+        ),
+        capture_frame_target_bytes=_integer(
+            data.get("capture_frame_target_bytes", 1 << 20),
+            "acquisition.capture_frame_target_bytes",
+            minimum=1,
+        ),
+        capture_flush_interval_seconds=_finite(
+            data.get("capture_flush_interval_seconds", 1),
+            "acquisition.capture_flush_interval_seconds",
+            positive=True,
+        ),
+        capture_compression_level=_optional_integer(
+            data.get("capture_compression_level"),
+            "acquisition.capture_compression_level",
+            minimum=-22,
+        ),
+        capture_fsync_on_boundary=_boolean(
+            data.get("capture_fsync_on_boundary", True), "acquisition.capture_fsync_on_boundary"
+        ),
+        health=health,
     )
 
 
@@ -106,6 +217,7 @@ def _parse_sgt(raw: object) -> SGTConfig:
             "practice",
             "proportional",
             "activation_calibration",
+            "progress_interval_seconds",
         },
         "sgt",
     )
@@ -132,43 +244,158 @@ def _parse_sgt(raw: object) -> SGTConfig:
         duration_seconds=_finite(
             data.get("duration_seconds", 4), "sgt.duration_seconds", positive=True
         ),
-        practice=bool(data.get("practice", True)),
-        proportional=bool(data.get("proportional", True)),
-        activation_calibration=bool(data.get("activation_calibration", True)),
+        practice=_boolean(data.get("practice", True), "sgt.practice"),
+        proportional=_boolean(data.get("proportional", True), "sgt.proportional"),
+        activation_calibration=_boolean(
+            data.get("activation_calibration", True), "sgt.activation_calibration"
+        ),
+        progress_interval_seconds=_finite(
+            data.get("progress_interval_seconds", 0.05),
+            "sgt.progress_interval_seconds",
+            positive=True,
+        ),
     )
 
 
 def _parse_model(raw: object) -> ModelConfig:
     data = _object(raw, "model")
-    _only(data, {"name", "preset_version"}, "model")
-    name = _string(data.get("name", "transformer"), "model.name")
-    if name not in MODEL_NAMES:
-        raise ValidationError(f"unsupported model.name: {name}")
-    return ModelConfig(
-        cast(Any, name), _integer(data.get("preset_version", 1), "model.preset_version", minimum=1)
+    _only(data, {"name", "architecture"}, "model")
+    name = _enum(data.get("name", ModelName.TRANSFORMER), ModelName, "model.name")
+    architecture = _object(data.get("architecture", {}), "model.architecture")
+    allowed = {
+        ModelName.TRANSFORMER: {"d_model", "nhead", "dim_feedforward", "dropout"},
+        ModelName.CNN1D: {"hidden_channels", "dropout"},
+        ModelName.CNN2D: {"hidden_channels", "dropout"},
+        ModelName.DENSE: {"hidden_dim", "dropout"},
+    }[name]
+    _only(architecture, allowed, "model.architecture")
+    parsed_architecture: list[tuple[str, float | int]] = []
+    for key, value in architecture.items():
+        parsed_architecture.append(
+            (
+                key,
+                _finite(value, f"model.architecture.{key}")
+                if key == "dropout"
+                else _integer(value, f"model.architecture.{key}", minimum=1),
+            )
+        )
+    return ModelConfig(name, tuple(parsed_architecture))
+
+
+def _parse_training(raw: object, device: DeviceConfig) -> TrainingConfig:
+    data = _object(raw, "training")
+    _only(
+        data,
+        {
+            "epochs",
+            "batch_size",
+            "learning_rate",
+            "validation_fraction",
+            "training_window_seconds",
+            "dataset_stride_seconds",
+            "stft_n_fft",
+            "stft_hop_samples",
+            "activation_loss_weight",
+            "weight_decay",
+            "normalization",
+            "seed",
+            "export_onnx",
+        },
+        "training",
+    )
+    validation_fraction = _finite(
+        data.get("validation_fraction", 0.2), "training.validation_fraction", positive=True
+    )
+    if validation_fraction >= 1:
+        raise ValidationError("training.validation_fraction must be less than 1")
+    n_fft = _optional_integer(data.get("stft_n_fft"), "training.stft_n_fft", minimum=4)
+    hop_samples = _optional_integer(
+        data.get("stft_hop_samples"), "training.stft_hop_samples", minimum=1
+    )
+    if n_fft is not None and hop_samples is not None and hop_samples > n_fft:
+        raise ValidationError(
+            "training.stft_hop_samples must be no larger than training.stft_n_fft"
+        )
+    return TrainingConfig(
+        epochs=_integer(data.get("epochs", 30), "training.epochs", minimum=1),
+        batch_size=_integer(data.get("batch_size", 128), "training.batch_size", minimum=1),
+        learning_rate=_finite(
+            data.get("learning_rate", 1e-4), "training.learning_rate", positive=True
+        ),
+        validation_fraction=validation_fraction,
+        training_window_seconds=_finite(
+            data.get("training_window_seconds", 1.0),
+            "training.training_window_seconds",
+            positive=True,
+        ),
+        dataset_stride_seconds=_finite(
+            data.get("dataset_stride_seconds", 0.005),
+            "training.dataset_stride_seconds",
+            positive=True,
+        ),
+        stft_n_fft=n_fft,
+        stft_hop_samples=hop_samples,
+        activation_loss_weight=_finite(
+            data.get("activation_loss_weight", 1.0),
+            "training.activation_loss_weight",
+        ),
+        weight_decay=_finite(data.get("weight_decay", 1e-4), "training.weight_decay"),
+        normalization=_enum(
+            data.get(
+                "normalization",
+                (
+                    NormalizationMode.SIGNED_8BIT
+                    if device.kind in {DeviceKind.MYO_BLE, DeviceKind.MYO_DONGLE}
+                    else NormalizationMode.DATASET_STANDARDIZE
+                ),
+            ),
+            NormalizationMode,
+            "training.normalization",
+        ),
+        seed=_integer(data.get("seed", 42), "training.seed"),
+        export_onnx=_boolean(data.get("export_onnx", True), "training.export_onnx"),
     )
 
 
 def _parse_inference(raw: object) -> InferenceConfig:
     data = _object(raw, "inference")
-    _only(data, {"backend", "confidence_gate", "interval_seconds", "switch_samples"}, "inference")
-    backend = _string(data.get("backend", "auto"), "inference.backend")
-    if backend not in BACKENDS:
-        raise ValidationError(f"unsupported inference.backend: {backend}")
+    _only(
+        data,
+        {
+            "backend",
+            "confidence_gate",
+            "inference_period_seconds",
+            "switch_predictions",
+            "idle_poll_seconds",
+            "maximum_wait_seconds",
+        },
+        "inference",
+    )
+    backend = _enum(
+        data.get("backend", InferenceBackend.AUTO), InferenceBackend, "inference.backend"
+    )
     gate = _finite(data.get("confidence_gate", 0.6), "inference.confidence_gate")
     if not 0 <= gate <= 1:
         raise ValidationError("inference.confidence_gate must be between 0 and 1")
     return InferenceConfig(
-        cast(Any, backend),
+        backend,
         gate,
-        _finite(data.get("interval_seconds", 0.05), "inference.interval_seconds", positive=True),
-        _integer(data.get("switch_samples", 3), "inference.switch_samples", minimum=1),
+        _finite(
+            data.get("inference_period_seconds", 1 / 60),
+            "inference.inference_period_seconds",
+            positive=True,
+        ),
+        _integer(data.get("switch_predictions", 3), "inference.switch_predictions", minimum=1),
+        _finite(data.get("idle_poll_seconds", 0.002), "inference.idle_poll_seconds", positive=True),
+        _finite(
+            data.get("maximum_wait_seconds", 0.01), "inference.maximum_wait_seconds", positive=True
+        ),
     )
 
 
 def _parse_dashboard(raw: object) -> DashboardConfig:
     data = _object(raw, "dashboard")
-    _only(data, {"host", "port", "handi_url"}, "dashboard")
+    _only(data, {"host", "port", "handi_url", "handi_timeout_seconds"}, "dashboard")
     port = _integer(data.get("port", 8765), "dashboard.port", minimum=1)
     if port > 65535:
         raise ValidationError("dashboard.port must be <= 65535")
@@ -176,6 +403,9 @@ def _parse_dashboard(raw: object) -> DashboardConfig:
         _string(data.get("host", "127.0.0.1"), "dashboard.host"),
         port,
         _optional_string(data.get("handi_url"), "dashboard.handi_url"),
+        _finite(
+            data.get("handi_timeout_seconds", 2), "dashboard.handi_timeout_seconds", positive=True
+        ),
     )
 
 
@@ -188,14 +418,11 @@ def _parse_handi(raw: object | None) -> HandiConfig | None:
         {
             "enabled",
             "rpc_socket",
-            "rpc_host",
-            "rpc_port",
             "rpc_timeout_seconds",
             "api_enabled",
             "api_host",
             "api_port",
             "step",
-            "map_flexion_to_grips",
             "joints",
             "grips",
             "gesture_mapping",
@@ -231,8 +458,6 @@ def _parse_handi(raw: object | None) -> HandiConfig | None:
         rpc_socket=_string(
             data.get("rpc_socket", "/var/run/arduino-router.sock"), "handi.rpc_socket"
         ),
-        rpc_host=_string(data.get("rpc_host", "127.0.0.1"), "handi.rpc_host"),
-        rpc_port=_integer(data.get("rpc_port", 5000), "handi.rpc_port", minimum=1),
         rpc_timeout_seconds=_finite(
             data.get("rpc_timeout_seconds", 1), "handi.rpc_timeout_seconds", positive=True
         ),
@@ -240,7 +465,6 @@ def _parse_handi(raw: object | None) -> HandiConfig | None:
         api_host=_string(data.get("api_host", "127.0.0.1"), "handi.api_host"),
         api_port=_integer(data.get("api_port", 8770), "handi.api_port", minimum=1),
         step=_finite(data.get("step", 5), "handi.step", positive=True),
-        map_flexion_to_grips=bool(data.get("map_flexion_to_grips", False)),
         joints=tuple(joints),
         grips=tuple(grips),
         gesture_mapping=tuple(
@@ -266,8 +490,10 @@ def load_profile(path: str | Path) -> QGripProfile:
             "data_root",
             "assets_root",
             "device",
+            "acquisition",
             "sgt",
             "model",
+            "training",
             "inference",
             "dashboard",
             "handi",
@@ -278,14 +504,17 @@ def load_profile(path: str | Path) -> QGripProfile:
     if version != SCHEMA_VERSION:
         raise ValidationError(f"unsupported schema_version {version}; expected {SCHEMA_VERSION}")
     base = resolved.parent
+    device = _parse_device(data.get("device", {}))
     return QGripProfile(
         version,
         resolved,
         _resolve(base, data.get("data_root", "data"), "data_root"),
         _resolve(base, data.get("assets_root", "assets/images"), "assets_root"),
-        _parse_device(data.get("device", {})),
+        device,
+        _parse_acquisition(data.get("acquisition", {})),
         _parse_sgt(data.get("sgt", {})),
         _parse_model(data.get("model", {})),
+        _parse_training(data.get("training", {}), device),
         _parse_inference(data.get("inference", {})),
         _parse_dashboard(data.get("dashboard", {})),
         _parse_handi(data.get("handi")),
@@ -298,6 +527,8 @@ def profile_document(profile: QGripProfile) -> dict[str, object]:
     document["data_root"] = os.path.relpath(profile.data_root, profile.path.parent)
     document["assets_root"] = os.path.relpath(profile.assets_root, profile.path.parent)
     handi = cast(dict[str, Any] | None, document.get("handi"))
+    model = cast(dict[str, Any], document["model"])
+    model["architecture"] = dict(model["architecture"])
     if handi is not None:
         handi["gesture_mapping"] = dict(handi["gesture_mapping"])
         for grip in cast(list[dict[str, Any]], handi["grips"]):
@@ -325,12 +556,14 @@ def write_profile_atomic(profile: QGripProfile, output: str | Path) -> Path:
     return target
 
 
-def default_profile(kind: str = "synthetic") -> dict[str, object]:
-    if kind not in DEVICE_KINDS:
-        raise ValidationError(f"unsupported device kind: {kind}")
+def default_profile(kind: DeviceKind | str = DeviceKind.SYNTHETIC) -> dict[str, object]:
+    try:
+        device_kind = DeviceKind(kind)
+    except ValueError as exc:
+        raise ValidationError(f"unsupported device kind: {kind}") from exc
     device: dict[str, object] = {
-        "kind": kind,
-        "sample_rate_hz": 1600 if kind == "sifi" else 200,
+        "kind": device_kind,
+        "sample_rate_hz": 1600 if device_kind == DeviceKind.SIFI else 200,
         "channels": 8,
     }
     return {
@@ -338,6 +571,23 @@ def default_profile(kind: str = "synthetic") -> dict[str, object]:
         "data_root": "data",
         "assets_root": "assets/images",
         "device": device,
+        "acquisition": {
+            "ring_buffer_seconds": 10.0,
+            "ack_timeout_seconds": 2.0,
+            "capture_log_enabled": True,
+            "capture_frame_target_bytes": 1 << 20,
+            "capture_flush_interval_seconds": 1.0,
+            "capture_compression_level": None,
+            "capture_fsync_on_boundary": True,
+            "health": {
+                "window_seconds": 5.0,
+                "stale_after_seconds": 2.0,
+                "minimum_rate_ratio": 0.9,
+                "maximum_rate_ratio": 1.1,
+                "maximum_missing_fraction": 0.0,
+                "maximum_lost_samples": 0,
+            },
+        },
         "sgt": {
             "gestures": [
                 "rest",
@@ -353,13 +603,35 @@ def default_profile(kind: str = "synthetic") -> dict[str, object]:
             "practice": True,
             "proportional": True,
             "activation_calibration": True,
+            "progress_interval_seconds": 0.05,
         },
-        "model": {"name": "transformer", "preset_version": 1},
+        "model": {"name": "transformer", "architecture": {}},
+        "training": {
+            "epochs": 30,
+            "batch_size": 128,
+            "learning_rate": 1e-4,
+            "validation_fraction": 0.2,
+            "training_window_seconds": 1.0,
+            "dataset_stride_seconds": 0.005,
+            "stft_n_fft": None,
+            "stft_hop_samples": None,
+            "activation_loss_weight": 1.0,
+            "weight_decay": 1e-4,
+            "normalization": (
+                "signed_8bit"
+                if device_kind in {DeviceKind.MYO_BLE, DeviceKind.MYO_DONGLE}
+                else "dataset_standardize"
+            ),
+            "seed": 42,
+            "export_onnx": True,
+        },
         "inference": {
             "backend": "auto",
             "confidence_gate": 0.6,
-            "interval_seconds": 0.05,
-            "switch_samples": 3,
+            "inference_period_seconds": 1 / 60,
+            "switch_predictions": 3,
+            "idle_poll_seconds": 0.002,
+            "maximum_wait_seconds": 0.01,
         },
-        "dashboard": {"host": "127.0.0.1", "port": 8765},
+        "dashboard": {"host": "127.0.0.1", "port": 8765, "handi_timeout_seconds": 2.0},
     }

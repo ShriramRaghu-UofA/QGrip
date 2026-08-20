@@ -9,10 +9,8 @@ from collections.abc import Callable
 from dataclasses import replace
 from typing import Protocol
 
-from qgrip.devices import SignalDevice, create_device
 from qgrip.domain import (
     ControllerState,
-    DeviceConfig,
     HandiConfig,
     Health,
     Prediction,
@@ -20,6 +18,7 @@ from qgrip.domain import (
 )
 from qgrip.errors import RpcError, ValidationError
 from qgrip.rpc import MessagePackRpcClient
+from qgrip.streaming import LiveEMGSession, PredictionDebouncer, sample_rates_match
 from qgrip.workflows import InferenceService
 
 LOGGER = logging.getLogger("qgrip.handi")
@@ -135,14 +134,12 @@ class HandiRuntime:
         profile: QGripProfile,
         model: str,
         *,
-        device_factory: Callable[[DeviceConfig], SignalDevice] = create_device,
         rpc_factory: Callable[[str, float], MotorRpc] = MessagePackRpcClient,
     ) -> None:
         if profile.handi is None or not profile.handi.enabled:
             raise ValidationError("profile does not enable Handi")
         self.profile = profile
         self.model = InferenceService(model, profile.inference.backend)
-        self.device = device_factory(profile.device)
         config = profile.handi
         self.controller = HandController(
             config, rpc_factory(config.rpc_socket, config.rpc_timeout_seconds)
@@ -155,13 +152,14 @@ class HandiRuntime:
         metadata = self.model.metadata
         if int(metadata["channels"]) != self.profile.device.channels:
             raise ValidationError("model channel count does not match device")
-        if float(metadata["sample_rate_hz"]) != self.profile.device.sample_rate_hz:
+        if not sample_rates_match(
+            float(metadata["sample_rate_hz"]), self.profile.device.sample_rate_hz
+        ):
             raise ValidationError("model sample rate does not match device")
 
     def start(self) -> None:
         self.validate()
         try:
-            self.device.connect()
             self.controller.connect()
             self.controller.apply_start_pose()
             with self.controller._lock:
@@ -171,19 +169,41 @@ class HandiRuntime:
             raise
 
     def run(self) -> None:
-        self.start()
         try:
-            while not self._stop.is_set():
-                packet = self.device.read(
-                    max(
-                        1, int(self.device.sample_rate_hz * self.profile.inference.interval_seconds)
-                    )
+            with LiveEMGSession(self.profile.device, self.profile.acquisition) as session:
+                if session.channels != self.model.channels:
+                    raise ValidationError("model channel count does not match live EMG stream")
+                if not sample_rates_match(
+                    session.sample_rate_hz, float(self.model.metadata["sample_rate_hz"])
+                ):
+                    raise ValidationError("model sample rate does not match live EMG stream")
+                minimum_new_samples = max(
+                    1,
+                    round(session.sample_rate_hz * self.profile.inference.inference_period_seconds),
                 )
-                prediction = self.model.predict(packet.samples)
-                if prediction.confidence >= self.profile.inference.confidence_gate:
-                    self.controller.apply_prediction(prediction)
-                if self.profile.device.kind == "synthetic":
-                    time.sleep(self.profile.inference.interval_seconds)
+                debouncer = PredictionDebouncer(self.profile.inference.switch_predictions)
+                self.start()
+                next_inference_at = time.monotonic()
+                while not self._stop.is_set():
+                    wait_seconds = next_inference_at - time.monotonic()
+                    if wait_seconds > 0:
+                        self._stop.wait(
+                            min(wait_seconds, self.profile.inference.maximum_wait_seconds)
+                        )
+                        continue
+                    samples = session.next_window(self.model.window_size, minimum_new_samples)
+                    if samples is not None:
+                        prediction = self.model.predict(samples)
+                        if prediction.confidence < self.profile.inference.confidence_gate:
+                            prediction = replace(prediction, gesture="rest")
+                        accepted = debouncer.accept(prediction)
+                        if accepted is not None:
+                            self.controller.apply_prediction(accepted)
+                        next_inference_at += self.profile.inference.inference_period_seconds
+                        if next_inference_at < time.monotonic():
+                            next_inference_at = time.monotonic()
+                    else:
+                        self._stop.wait(self.profile.inference.idle_poll_seconds)
         except BaseException as exc:
             self.controller.fail(str(exc))
             raise
@@ -203,7 +223,4 @@ class HandiRuntime:
                 return
             self._closed = True
         self._stop.set()
-        try:
-            self.device.close()
-        finally:
-            self.controller.close()
+        self.controller.close()

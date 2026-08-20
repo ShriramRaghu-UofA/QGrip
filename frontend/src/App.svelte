@@ -155,6 +155,21 @@
         <StagePanel title="Validate" description="Inspect class, confidence, activation, signal health, and end-to-end latency." active>
           <select class="select w-full" bind:value={modelPath} aria-label="Inference checkpoint"><option value="">Select a checkpoint</option>{#each artifacts.filter((path) => path.endsWith('.pt')) as path (path)}<option value={path}>{path}</option>{/each}</select>
           <div class="stats stats-vertical bg-base-300 sm:stats-horizontal"><div class="stat"><div class="stat-title">Class</div><div class="stat-value">{status.prediction?.gesture ?? '—'}</div></div><div class="stat"><div class="stat-title">Confidence</div><div class="stat-value text-success">{status.prediction ? `${Math.round(status.prediction.confidence * 100)}%` : '—'}</div></div><div class="stat"><div class="stat-title">Activation</div><div class="stat-value">{status.prediction ? `${Math.round(status.prediction.activation * 100)}%` : '—'}</div></div><div class="stat"><div class="stat-title">Latency</div><div class="stat-value">{status.prediction ? status.prediction.latency_ms.toFixed(1) : '—'} ms</div></div></div>
+          {#if status.health}
+            <div class={[
+              'alert',
+              status.health.severity === 'healthy'
+                ? 'alert-success'
+                : ['critical', 'fatal'].includes(status.health.severity)
+                  ? 'alert-error'
+                  : 'alert-warning'
+            ]}>
+              <span>
+                Signal health: {status.health.severity}. Device loss: {status.health.lost_samples}; missing values: {status.health.missing_values}; malformed packets: {status.health.malformed_packets}; consumer overruns: {status.health.consumer_overruns}.
+                {status.health.warnings.join(' ')}
+              </span>
+            </div>
+          {/if}
           <MetricPlot history={predictionHistory} />
           <div class="card-actions justify-end"><button class="btn" onclick={() => void api.request('/api/v1/inference/stop', { method: 'POST' })}>Stop</button><button class="btn btn-primary" disabled={!modelPath} onclick={() => void start('/api/v1/inference/start', { model: modelPath }, '/api/v1/inference/status')}>Start live inference</button></div>
         </StagePanel>

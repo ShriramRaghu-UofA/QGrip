@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from qgrip.domain import NormalizationMode
 from qgrip.errors import ValidationError
 from qgrip.profiles import load_profile, write_profile_atomic
 from tests.helpers import write_profile
@@ -18,6 +19,45 @@ class ProfileTests(unittest.TestCase):
             output = root / "calibrated.json"
             write_profile_atomic(profile, output)
             self.assertEqual(load_profile(output).handi, profile.handi)
+
+    def test_inference_period_and_prediction_debounce_are_distinct(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            profile = load_profile(write_profile(Path(directory)))
+            self.assertEqual(profile.inference.inference_period_seconds, 0.01)
+            self.assertEqual(profile.inference.switch_predictions, 1)
+
+    def test_training_configuration_is_loaded_from_the_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            profile = load_profile(write_profile(Path(directory)))
+            self.assertEqual(profile.training.dataset_stride_seconds, 0.005)
+            self.assertEqual(profile.training.training_window_seconds, 0.05)
+            self.assertEqual(profile.training.epochs, 1)
+
+    def test_nested_acquisition_and_model_configuration_is_loaded(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            profile = load_profile(write_profile(Path(directory)))
+            self.assertEqual(profile.acquisition.ring_buffer_seconds, 10)
+            self.assertEqual(profile.acquisition.health.maximum_lost_samples, 0)
+            self.assertEqual(profile.model.architecture, ())
+
+    def test_normalization_defaults_by_device(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_profile(Path(directory))
+            document = json.loads(path.read_text(encoding="utf-8"))
+            training = document["training"]
+            assert isinstance(training, dict)
+            training.pop("normalization")
+            document["device"] = {"kind": "myo_ble", "sample_rate_hz": 200, "channels": 8}
+            path.write_text(json.dumps(document), encoding="utf-8")
+            self.assertEqual(
+                load_profile(path).training.normalization, NormalizationMode.SIGNED_8BIT
+            )
+            document["device"] = {"kind": "sifi", "sample_rate_hz": 1600, "channels": 8}
+            path.write_text(json.dumps(document), encoding="utf-8")
+            self.assertEqual(
+                load_profile(path).training.normalization,
+                NormalizationMode.DATASET_STANDARDIZE,
+            )
 
     def test_unknown_and_nonfinite_values_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

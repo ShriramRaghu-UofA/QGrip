@@ -9,20 +9,28 @@
     "address": "127.0.0.1",
     "port": "5000"
   },
+  "acquisition": {"ring_buffer_seconds": 10.0, "ack_timeout_seconds": 2.0, "capture_log_enabled": true, "capture_frame_target_bytes": 1048576, "capture_flush_interval_seconds": 1.0, "capture_compression_level": null, "capture_fsync_on_boundary": true, "health": {"window_seconds": 5.0, "stale_after_seconds": 2.0, "minimum_rate_ratio": 0.9, "maximum_rate_ratio": 1.1, "maximum_missing_fraction": 0.0, "maximum_lost_samples": 0}},
   "sgt": {
     "gestures": ["rest", "close", "open", "wrist_flexion", "wrist_extension", "pronation", "supination"],
     "trials": 3,
     "duration_seconds": 4,
     "practice": true,
     "proportional": true,
-    "activation_calibration": true
+    "activation_calibration": true, "progress_interval_seconds": 0.05
   },
-  "model": {"name": "transformer", "preset_version": 1},
+  "model": {"name": "transformer", "architecture": {}},
+  "training": {
+    "epochs": 30, "batch_size": 128, "learning_rate": 0.0001,
+    "validation_fraction": 0.2, "training_window_seconds": 1.0,
+    "dataset_stride_seconds": 0.005, "stft_n_fft": null,
+    "stft_hop_samples": null, "activation_loss_weight": 1.0, "weight_decay": 0.0001, "normalization": "dataset_standardize",
+    "seed": 42, "export_onnx": true
+  },
   "inference": {
     "backend": "auto",
     "confidence_gate": 0.6,
-    "interval_seconds": 0.05,
-    "switch_samples": 3
+    "inference_period_seconds": 0.016666666666666666,
+    "switch_predictions": 3, "idle_poll_seconds": 0.002, "maximum_wait_seconds": 0.01
   },
-  "dashboard": {"host": "127.0.0.1", "port": 8765}
+  "dashboard": {"host": "127.0.0.1", "port": 8765, "handi_timeout_seconds": 2.0}
 }

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Callable, Sized
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -17,23 +16,10 @@ from sklearn.model_selection import GroupShuffleSplit, train_test_split
 from torch import nn
 from torch.utils.data import DataLoader, Dataset, Subset
 
-from qgrip.artifacts import export_capture, latest_capture, subject_root
-from qgrip.domain import EpochMetric, TrainingRequest
+from qgrip.artifacts import export_capture, latest_capture, parquet_path, subject_root
+from qgrip.domain import EpochMetric, TrainingConfig, TrainingRequest
 from qgrip.errors import ArtifactError
 from qgrip.models import BaseEMGClassifier, create_model, export_model_to_onnx
-
-
-@dataclass(frozen=True, slots=True)
-class TrainingOptions:
-    epochs: int = 30
-    batch_size: int = 128
-    learning_rate: float = 1e-4
-    validation_fraction: float = 0.2
-    window_seconds: float = 1.0
-    stride_seconds: float = 0.05
-    activation_loss_weight: float = 1.0
-    seed: int = 42
-    export_onnx: bool = True
 
 
 class EMGWindowDataset(Dataset[tuple[torch.Tensor, ...]]):
@@ -210,8 +196,8 @@ def _evaluate(
 class TorchTrainingService:
     PRESET_VERSION = 1
 
-    def __init__(self, options: TrainingOptions | None = None) -> None:
-        self.options = options or TrainingOptions()
+    def __init__(self, options: TrainingConfig) -> None:
+        self.options = options
 
     def train(
         self,
@@ -223,24 +209,30 @@ class TorchTrainingService:
         resolved: list[Path] = []
         for source in inputs:
             path = source.resolve()
-            if path.suffix == ".jsonl":
-                derived = path.with_suffix(".parquet")
+            if path.name.endswith(".capture.jsonl.zst"):
+                derived = parquet_path(path)
                 path = derived if derived.exists() else export_capture(path)
             if path.suffix != ".parquet" or not path.is_file():
                 raise ArtifactError(f"training input is not Parquet: {path}")
             resolved.append(path)
         sample_rate = request.profile.device.sample_rate_hz
-        window_size = max(8, round(sample_rate * self.options.window_seconds))
-        stride = max(1, round(sample_rate * self.options.stride_seconds))
+        window_size = max(8, round(sample_rate * self.options.training_window_seconds))
+        dataset_stride = max(1, round(sample_rate * self.options.dataset_stride_seconds))
         n_fft_limit = 64 if sample_rate >= 400 else 32
-        n_fft = 2 ** math.floor(math.log2(min(n_fft_limit, window_size)))
-        n_fft = max(4, n_fft)
-        hop_length = max(1, n_fft // 4)
+        default_n_fft = 2 ** math.floor(math.log2(min(n_fft_limit, window_size)))
+        n_fft = self.options.stft_n_fft or max(4, default_n_fft)
+        if not 4 <= n_fft <= window_size:
+            raise ArtifactError(
+                "stft_n_fft must be at least 4 and no larger than the training window"
+            )
+        stft_hop_samples = self.options.stft_hop_samples or max(1, n_fft // 4)
+        if not 1 <= stft_hop_samples <= n_fft:
+            raise ArtifactError("stft_hop_samples must be between 1 and stft_n_fft")
         dataset = EMGWindowDataset(
             tuple(resolved),
             labels=request.profile.sgt.gestures,
             window_size=window_size,
-            stride=stride,
+            stride=dataset_stride,
             channels=request.profile.device.channels,
             sample_rate_hz=sample_rate,
             include_activation=request.proportional,
@@ -267,16 +259,19 @@ class TorchTrainingService:
             window_size=window_size,
             n_channels=dataset.channels,
             n_fft=n_fft,
-            hop_length=hop_length,
-            normalization="dataset_standardize" if request.proportional else "window_zscore",
+            hop_length=stft_hop_samples,
+            normalization=self.options.normalization.value,
             predict_activation=request.proportional,
+            **dict(request.profile.model.architecture),
         )
-        if request.proportional:
+        if model.normalization == "dataset_standardize":
             adapt_loader = DataLoader(train_dataset, batch_size=self.options.batch_size)
             model.preprocessor.adapt(batch[0] for batch in adapt_loader)
         model = model.to(device)
         optimizer = torch.optim.AdamW(
-            model.parameters(), lr=self.options.learning_rate, weight_decay=1e-4
+            model.parameters(),
+            lr=self.options.learning_rate,
+            weight_decay=self.options.weight_decay,
         )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.options.epochs)
         class_loss = nn.CrossEntropyLoss()
@@ -333,7 +328,7 @@ class TorchTrainingService:
         checkpoint: dict[str, Any] = {
             "checkpoint_version": 2 if request.proportional else 1,
             "model_state_dict": best_state,
-            "model_name": request.model,
+            "model_name": request.model.value,
             "model_config": model.model_config,
             "labels": list(dataset.labels),
             "label_to_idx": dataset.label_to_index,
@@ -342,11 +337,11 @@ class TorchTrainingService:
             "channels": dataset.channels,
             "n_classes": len(dataset.labels),
             "n_fft": n_fft,
-            "hop_length": hop_length,
-            "device": request.profile.device.kind,
+            "hop_length": stft_hop_samples,
+            "device": request.profile.device.kind.value,
             "sample_rate": sample_rate,
             "sample_rate_hz": sample_rate,
-            "normalization": model.normalization,
+            "normalization": model.normalization.value,
             "predict_activation": request.proportional,
             "preset_version": self.PRESET_VERSION,
             "val_loss": best_loss,

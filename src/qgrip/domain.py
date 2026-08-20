@@ -3,23 +3,89 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
-from typing import Literal
 
-DeviceKind = Literal["sifi", "myo_ble", "myo_dongle", "synthetic"]
-ModelName = Literal["transformer", "cnn1d", "cnn2d", "dense"]
-InferenceBackend = Literal["auto", "torch", "onnx"]
-JobState = Literal["idle", "running", "completed", "cancelled", "failed"]
+
+class DeviceKind(StrEnum):
+    SIFI = "sifi"
+    MYO_BLE = "myo_ble"
+    MYO_DONGLE = "myo_dongle"
+    SYNTHETIC = "synthetic"
+
+
+class ModelName(StrEnum):
+    TRANSFORMER = "transformer"
+    CNN1D = "cnn1d"
+    CNN2D = "cnn2d"
+    DENSE = "dense"
+
+
+class InferenceBackend(StrEnum):
+    AUTO = "auto"
+    TORCH = "torch"
+    ONNX = "onnx"
+
+
+class NormalizationMode(StrEnum):
+    WINDOW_ZSCORE = "window_zscore"
+    SIGNED_8BIT = "signed_8bit"
+    DATASET_STANDARDIZE = "dataset_standardize"
+
+
+class JobState(StrEnum):
+    IDLE = "idle"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+
+
+class SGTCommand(StrEnum):
+    ABORT = "abort"
+    PAUSE = "pause"
+    RESUME = "resume"
+    REPEAT = "repeat"
+
+
+class SignalHealthSeverity(StrEnum):
+    HEALTHY = "healthy"
+    WARNING = "warning"
+    CRITICAL = "critical"
+    FATAL = "fatal"
+    WARMING_UP = "warming_up"
 
 
 @dataclass(frozen=True, slots=True)
 class DeviceConfig:
-    kind: DeviceKind = "synthetic"
+    kind: DeviceKind = DeviceKind.SYNTHETIC
     sample_rate_hz: float = 200.0
     channels: int = 8
     address: str | None = None
     port: str | None = None
     seed: int = 7
+
+
+@dataclass(frozen=True, slots=True)
+class HealthConfig:
+    window_seconds: float = 5.0
+    stale_after_seconds: float | None = 2.0
+    minimum_rate_ratio: float | None = 0.9
+    maximum_rate_ratio: float | None = 1.1
+    maximum_missing_fraction: float | None = 0.0
+    maximum_lost_samples: int | None = 0
+
+
+@dataclass(frozen=True, slots=True)
+class AcquisitionConfig:
+    ring_buffer_seconds: float = 10.0
+    ack_timeout_seconds: float = 2.0
+    capture_log_enabled: bool = True
+    capture_frame_target_bytes: int = 1 << 20
+    capture_flush_interval_seconds: float = 1.0
+    capture_compression_level: int | None = None
+    capture_fsync_on_boundary: bool = True
+    health: HealthConfig = field(default_factory=HealthConfig)
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,20 +104,40 @@ class SGTConfig:
     practice: bool = True
     proportional: bool = True
     activation_calibration: bool = True
+    progress_interval_seconds: float = 0.05
 
 
 @dataclass(frozen=True, slots=True)
 class ModelConfig:
-    name: ModelName = "transformer"
-    preset_version: int = 1
+    name: ModelName = ModelName.TRANSFORMER
+    architecture: tuple[tuple[str, float | int], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class TrainingConfig:
+    epochs: int = 30
+    batch_size: int = 128
+    learning_rate: float = 1e-4
+    validation_fraction: float = 0.2
+    training_window_seconds: float = 1.0
+    dataset_stride_seconds: float = 0.005
+    stft_n_fft: int | None = None
+    stft_hop_samples: int | None = None
+    activation_loss_weight: float = 1.0
+    weight_decay: float = 1e-4
+    normalization: NormalizationMode = NormalizationMode.DATASET_STANDARDIZE
+    seed: int = 42
+    export_onnx: bool = True
 
 
 @dataclass(frozen=True, slots=True)
 class InferenceConfig:
-    backend: InferenceBackend = "auto"
+    backend: InferenceBackend = InferenceBackend.AUTO
     confidence_gate: float = 0.6
-    interval_seconds: float = 0.05
-    switch_samples: int = 3
+    inference_period_seconds: float = 1 / 60
+    switch_predictions: int = 3
+    idle_poll_seconds: float = 0.002
+    maximum_wait_seconds: float = 0.01
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +145,7 @@ class DashboardConfig:
     host: str = "127.0.0.1"
     port: int = 8765
     handi_url: str | None = None
+    handi_timeout_seconds: float = 2.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,14 +169,11 @@ class GripPreset:
 class HandiConfig:
     enabled: bool = False
     rpc_socket: str = "/var/run/arduino-router.sock"
-    rpc_host: str = "127.0.0.1"
-    rpc_port: int = 5000
     rpc_timeout_seconds: float = 1.0
     api_enabled: bool = False
     api_host: str = "127.0.0.1"
     api_port: int = 8770
     step: float = 5.0
-    map_flexion_to_grips: bool = False
     joints: tuple[JointLimit, ...] = ()
     grips: tuple[GripPreset, ...] = ()
     gesture_mapping: tuple[tuple[str, str], ...] = (
@@ -105,8 +189,10 @@ class QGripProfile:
     data_root: Path
     assets_root: Path
     device: DeviceConfig
+    acquisition: AcquisitionConfig
     sgt: SGTConfig
     model: ModelConfig
+    training: TrainingConfig
     inference: InferenceConfig
     dashboard: DashboardConfig
     handi: HandiConfig | None = None
@@ -170,6 +256,19 @@ class Prediction:
 
 
 @dataclass(frozen=True, slots=True)
+class LiveSignalHealth:
+    """QGrip wire-safe summary of streamer device and consumer health."""
+
+    severity: SignalHealthSeverity = SignalHealthSeverity.WARMING_UP
+    warnings: tuple[str, ...] = ()
+    missing_values: int = 0
+    lost_samples: int = 0
+    malformed_packets: int = 0
+    misaligned_packets: int = 0
+    consumer_overruns: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class ControllerState:
     running: bool = False
     healthy: bool = True
@@ -198,3 +297,4 @@ class JobStatus:
     result: str | None = None
     metrics: tuple[EpochMetric, ...] = field(default_factory=tuple)
     prediction: Prediction | None = None
+    health: LiveSignalHealth | None = None

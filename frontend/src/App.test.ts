@@ -44,7 +44,20 @@ test('live inference renders backend predictions', async () => {
     let body: object = { api_version: 1, profile: 'synthetic.json', device: 'synthetic', gestures: ['rest', 'open', 'close'], models: ['dense'] };
     if (path.includes('/api/v1/artifacts')) body = { artifacts: ['C:/data/model.pt'] };
     if (path.includes('/api/v1/inference/start')) body = { state: 'running', kind: 'inference' };
-    if (path.includes('/api/v1/inference/status')) body = { state: 'running', kind: 'inference', prediction: { gesture: 'open', confidence: 0.91, activation: 0.64, latency_ms: 3.2 } };
+    if (path.includes('/api/v1/inference/status')) body = {
+      state: 'running',
+      kind: 'inference',
+      prediction: { gesture: 'open', confidence: 0.91, activation: 0.64, latency_ms: 3.2 },
+      health: {
+        severity: 'warning',
+        warnings: ['device samples lost'],
+        missing_values: 2,
+        lost_samples: 3,
+        malformed_packets: 0,
+        misaligned_packets: 0,
+        consumer_overruns: 1,
+      },
+    };
     return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
   }));
   const user = userEvent.setup();
@@ -56,4 +69,6 @@ test('live inference renders backend predictions', async () => {
   await waitFor(() => expect(screen.getByText('91%')).toBeInTheDocument(), { timeout: 2000 });
   expect(screen.getByText('open')).toBeInTheDocument();
   expect(screen.getByText('64%')).toBeInTheDocument();
+  expect(screen.getByText(/Device loss: 3/)).toBeInTheDocument();
+  expect(screen.getByText(/consumer overruns: 1/)).toBeInTheDocument();
 });

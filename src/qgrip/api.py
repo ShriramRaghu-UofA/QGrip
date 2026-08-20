@@ -6,7 +6,7 @@ import secrets
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -15,10 +15,17 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from qgrip.artifacts import discover_artifacts
-from qgrip.devices import check_device
-from qgrip.domain import QGripProfile, SGTRequest, TrainingRequest
+from qgrip.domain import (
+    JobState,
+    ModelName,
+    QGripProfile,
+    SGTCommand,
+    SGTRequest,
+    TrainingRequest,
+)
 from qgrip.errors import QGripError
 from qgrip.profiles import load_profile
+from qgrip.streaming import check_streamer_device
 from qgrip.workflows import WorkflowCoordinator
 
 
@@ -37,7 +44,7 @@ class ExportWire(WireModel):
 
 class TrainingWire(SubjectWire):
     inputs: list[str] = []
-    model: Literal["transformer", "cnn1d", "cnn2d", "dense"] | None = None
+    model: ModelName | None = None
 
 
 class CalibrationWire(WireModel):
@@ -94,12 +101,12 @@ def create_app(
             "profile": str(current.path),
             "device": current.device.kind,
             "gestures": current.sgt.gestures,
-            "models": ["transformer", "cnn1d", "cnn2d", "dense"],
+            "models": list(ModelName),
         }
 
     @app.get("/api/v1/doctor", dependencies=protected)
     def doctor() -> dict[str, object]:
-        return check_device(current.device)
+        return check_streamer_device(current.device, current.acquisition)
 
     @app.get("/api/v1/artifacts", dependencies=protected)
     def artifacts(subject: str | None = None) -> dict[str, object]:
@@ -110,17 +117,17 @@ def create_app(
         return asdict(owner.start_sgt(SGTRequest(body.subject, current, not body.discrete)))
 
     @app.post("/api/v1/sgt/command", dependencies=protected)
-    def command_sgt(command: Literal["abort", "pause", "resume", "repeat"]) -> dict[str, object]:
-        if command == "abort":
+    def command_sgt(command: SGTCommand) -> dict[str, object]:
+        if command == SGTCommand.ABORT:
             owner.cancel()
-        return {"accepted": command == "abort", "command": command}
+        return {"accepted": command == SGTCommand.ABORT, "command": command}
 
     @app.get("/api/v1/sgt/status", dependencies=protected)
     @app.get("/api/v1/export/status", dependencies=protected)
     @app.get("/api/v1/training/status", dependencies=protected)
     @app.get("/api/v1/inference/status", dependencies=protected)
     def status() -> dict[str, object]:
-        return asdict(owner.status) if owner.status else {"state": "idle"}
+        return asdict(owner.status) if owner.status else {"state": JobState.IDLE}
 
     @app.post("/api/v1/export/start", dependencies=protected)
     def start_export(body: ExportWire) -> dict[str, object]:
@@ -151,7 +158,7 @@ def create_app(
     async def handi_status() -> dict[str, object]:
         if not current.dashboard.handi_url:
             return {"configured": False}
-        async with httpx.AsyncClient(timeout=2) as client:
+        async with httpx.AsyncClient(timeout=current.dashboard.handi_timeout_seconds) as client:
             response = await client.get(f"{current.dashboard.handi_url.rstrip('/')}/api/v1/status")
             response.raise_for_status()
             return {"configured": True, "remote": response.json()}
@@ -160,7 +167,7 @@ def create_app(
     async def handi_calibration(body: CalibrationWire) -> dict[str, object]:
         if not current.dashboard.handi_url:
             return {"configured": False}
-        async with httpx.AsyncClient(timeout=2) as client:
+        async with httpx.AsyncClient(timeout=current.dashboard.handi_timeout_seconds) as client:
             response = await client.post(
                 f"{current.dashboard.handi_url.rstrip('/')}/api/v1/calibration/jog",
                 json=body.model_dump(),

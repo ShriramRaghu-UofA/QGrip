@@ -16,6 +16,7 @@ export interface JobStatus {
   result?: string;
   prediction?: Prediction;
   metrics?: EpochMetric[];
+  health?: LiveSignalHealth;
 }
 
 export interface Prediction {
@@ -29,6 +30,16 @@ export interface EpochMetric {
   epoch: number;
   loss: number;
   accuracy: number;
+}
+
+export interface LiveSignalHealth {
+  severity: string;
+  warnings: string[];
+  missing_values: number;
+  lost_samples: number;
+  malformed_packets: number;
+  misaligned_packets: number;
+  consumer_overruns: number;
 }
 
 export interface ArtifactList {

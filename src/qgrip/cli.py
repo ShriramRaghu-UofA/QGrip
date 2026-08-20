@@ -8,17 +8,18 @@ import logging
 import signal
 import sys
 import threading
+import time
 from collections.abc import Sequence
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 from qgrip.artifacts import discover_artifacts, export_capture, latest_capture
 from qgrip.assets import DEFAULT_GESTURES, GESTURE_ASSETS, LIBEMG_CITATION_URL, download_assets
-from qgrip.devices import check_device, create_device
 from qgrip.domain import SGTRequest, TrainingRequest
 from qgrip.errors import QGripError, ValidationError
 from qgrip.handi import HandiRuntime
 from qgrip.profiles import default_profile, load_profile, profile_document, write_profile_atomic
+from qgrip.streaming import LiveEMGSession, PredictionDebouncer, check_streamer_device
 from qgrip.workflows import InferenceService, SGTService, TrainingService
 
 
@@ -80,6 +81,7 @@ def build_parser() -> argparse.ArgumentParser:
     infer = commands.add_parser("infer")
     infer.add_argument("model", type=Path)
     _profile_argument(infer)
+    infer.add_argument("--once", action="store_true", help="print one prediction and exit")
 
     web = commands.add_parser("web")
     _profile_argument(web)
@@ -164,7 +166,7 @@ def dispatch(args: argparse.Namespace) -> int:
         return 0
     profile = load_profile(args.profile)
     if args.command == "doctor":
-        print(json.dumps(check_device(profile.device), indent=2))
+        print(json.dumps(check_streamer_device(profile.device, profile.acquisition), indent=2))
     elif args.command == "sgt":
         path = SGTService().run(
             SGTRequest(args.subject, profile, not args.discrete), threading.Event()
@@ -185,17 +187,35 @@ def dispatch(args: argparse.Namespace) -> int:
         print(TrainingService().train(request, threading.Event()))
     elif args.command == "infer":
         inference = InferenceService(args.model, profile.inference.backend)
-        device = create_device(profile.device)
-        try:
-            device.connect()
-            prediction = inference.predict(
-                device.read(
-                    max(1, int(device.sample_rate_hz * profile.inference.interval_seconds))
-                ).samples
+        with LiveEMGSession(profile.device, profile.acquisition) as session:
+            if session.channels != inference.channels:
+                raise ValidationError("model channel count does not match live EMG stream")
+            minimum_new_samples = max(
+                1,
+                round(session.sample_rate_hz * profile.inference.inference_period_seconds),
             )
-            print(json.dumps(asdict(prediction), indent=2))
-        finally:
-            device.close()
+            debouncer = PredictionDebouncer(profile.inference.switch_predictions)
+            next_inference_at = time.monotonic()
+            while True:
+                wait_seconds = next_inference_at - time.monotonic()
+                if wait_seconds > 0:
+                    time.sleep(min(wait_seconds, profile.inference.maximum_wait_seconds))
+                    continue
+                samples = session.next_window(inference.window_size, minimum_new_samples)
+                if samples is None:
+                    time.sleep(profile.inference.idle_poll_seconds)
+                    continue
+                prediction = inference.predict(samples)
+                if prediction.confidence < profile.inference.confidence_gate:
+                    prediction = replace(prediction, gesture="rest")
+                accepted = debouncer.accept(prediction)
+                if accepted is not None:
+                    print(json.dumps(asdict(accepted), indent=2), flush=True)
+                    if args.once:
+                        break
+                next_inference_at += profile.inference.inference_period_seconds
+                if next_inference_at < time.monotonic():
+                    next_inference_at = time.monotonic()
     elif args.command == "web":
         import secrets
 
@@ -230,6 +250,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     try:
         return dispatch(build_parser().parse_args(argv))
+    except KeyboardInterrupt:
+        return 130
     except (QGripError, OSError, ValueError) as exc:
         print(f"qgrip: error: {exc}", file=sys.stderr)
         return 2
