@@ -58,6 +58,7 @@
   const stageIndex = $derived(stages.indexOf(stage));
   const progress = $derived(Math.round((status.progress ?? 0) * 100));
   const sgtRunning = $derived(status.kind === 'sgt' && status.state === 'running');
+  const inferenceRunning = $derived(status.kind === 'inference' && status.state === 'running');
   const awaiting = $derived(!!status.awaiting_command);
   const stimulusUrl = $derived(
     status.stimulus_image ? `/stimuli/${encodeURIComponent(status.stimulus_image)}` : ''
@@ -424,7 +425,7 @@
             </div>
           {/if}
           <MetricPlot history={predictionHistory} />
-          <div class="card-actions justify-end"><button class="btn" onclick={() => void api.request('/api/v1/inference/stop', { method: 'POST' })}>Stop</button><button class="btn btn-primary" disabled={!modelPath} onclick={() => void start('/api/v1/inference/start', { model: modelPath }, '/api/v1/inference/status')}>Start live inference</button></div>
+          <div class="card-actions justify-end">{#if inferenceRunning}<button class="btn btn-error" onclick={() => void api.request('/api/v1/inference/stop', { method: 'POST' })}>Stop live inference</button>{:else}<button class="btn btn-primary" disabled={!modelPath} onclick={() => void start('/api/v1/inference/start', { model: modelPath }, '/api/v1/inference/status')}>Start live inference</button>{/if}</div>
         </StagePanel>
       {:else}
         <StagePanel title="Handi" description="Observe the remote standalone controller and perform bounded calibration." active>
