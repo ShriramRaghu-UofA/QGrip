@@ -5,6 +5,16 @@ validating gesture models, and safely controlling a Handi hand through the Ardui
 UNO Q Router. It includes an installable FastAPI/Svelte dashboard and a completely
 standalone UNO Q runtime.
 
+QGrip has three ways to use the same workflow services:
+
+- the local web dashboard for guided capture, training, and live validation;
+- the `qgrip` command-line interface for scripted or terminal-based workflows; and
+- Python services for applications that need to consume real-time predictions directly.
+
+The capture log is the source of truth. Parquet datasets, model checkpoints, ONNX
+exports, metadata, and metrics are derived artifacts written under the profile's
+`data_root`.
+
 ## Quick start
 
 ```powershell
@@ -16,6 +26,22 @@ uv run qgrip export demo --profile synthetic.json
 uv run qgrip train demo --profile synthetic.json
 uv run qgrip web --profile synthetic.json
 ```
+
+The synthetic profile is useful for checking the software path. For a physical
+device, create the appropriate `sifi`, `myo_ble`, or `myo_dongle` profile and edit
+its device settings before running `doctor`.
+
+## Choose a workflow
+
+Use the dashboard when an operator needs guided collection, artifact selection, and
+a live validation display. Use the CLI when the workflow is being scripted or run
+without a browser. Use the Python API when another application needs to receive
+predictions in-process. All three use the profile, typed workflow services, and
+device adapters described below.
+
+Only one hardware-owning activity may run in a process. Do not run a CLI inference
+loop, dashboard inference job, Handi runtime, or another `LiveEMGSession` at the
+same time against the same process/device.
 
 ## Launching the web dashboard
 
@@ -70,6 +96,137 @@ The dashboard guides the complete workflow:
    `metadata.json`, and `metrics.json` under `data/<subject>/models/<run-id>/`.
 5. **Validate** starts live acquisition and displays the predicted gesture,
    confidence, proportional activation, latency, and prediction history.
+
+### Dashboard workflow, step by step
+
+1. Create and validate a profile with `qgrip profile create` and `qgrip doctor`.
+2. Start `qgrip web --profile <profile.json>` and open the entire URL printed by
+   QGrip, including its token.
+3. In **Setup**, enter a subject identifier and use **Connect device** to verify the
+   same live acquisition path used by capture and inference.
+4. In **Collect**, start screen-guided training (SGT). Follow each prompt; choose
+   automatic or manual advancement as appropriate. QGrip writes an authoritative
+   JSONL capture log.
+5. Export the completed capture to Parquet from the collection screen.
+6. In **Train**, select a model preset and training data, then wait for the
+   checkpoint and derived artifacts to be produced.
+7. In **Validate**, select the generated `.pt` checkpoint and start live inference.
+   The screen shows the accepted gesture, confidence, activation, model latency,
+   signal health, and a prediction history. Stop the job before leaving the
+   hardware to another workflow.
+
+The dashboard API is token-protected. It starts live inference with
+`POST /api/v1/inference/start`, reports the latest accepted prediction through
+`GET /api/v1/inference/status`, and also publishes status updates through the
+authenticated server-sent-events endpoint `/api/v1/stream?token=...`. It is designed
+for controlling and observing live acquisition; it does not accept arbitrary EMG
+sample windows for one-off prediction.
+
+## Command-line workflow
+
+Run `uv run qgrip --help` to see the installed commands. From a source checkout,
+the following is the normal end-to-end flow. Replace `synthetic` with a real device
+profile and `demo` with your subject identifier when appropriate.
+
+```powershell
+# Create, inspect, and validate a profile.
+uv run qgrip profile create synthetic.json --device synthetic
+uv run qgrip profile validate synthetic.json
+uv run qgrip doctor --profile synthetic.json
+
+# Record a screen-guided session, then derive its training dataset.
+uv run qgrip sgt demo --profile synthetic.json
+uv run qgrip export demo --profile synthetic.json
+
+# Train using the latest capture for the subject.
+uv run qgrip train demo --profile synthetic.json
+```
+
+`sgt` records proportional targets by default; add `--discrete` to record and train
+a discrete model instead. `export` uses the subject's latest capture by default, or
+accepts one or more explicit capture-log paths. `train` likewise uses the latest
+capture when `--input` is omitted; repeat `--input <dataset.parquet>` to select
+specific exported datasets, and use `--model transformer|cnn1d|cnn2d|dense` to
+override the profile default.
+
+Training creates a run directory under
+`data/<subject>/models/<run-id>/` containing `model.pt`, `model.onnx` when ONNX
+export is enabled, `metadata.json`, and `metrics.json`. These artifacts are
+self-describing and are not overwritten.
+
+### Run live inference from the CLI
+
+Pass the generated checkpoint to `infer`:
+
+```powershell
+# Print one accepted prediction as JSON and exit.
+uv run qgrip infer data/demo/models/RUN/model.pt --profile synthetic.json --once
+
+# Keep printing accepted predictions until Ctrl+C.
+uv run qgrip infer data/demo/models/RUN/model.pt --profile synthetic.json
+```
+
+Each emitted JSON object has `gesture`, `confidence`, `activation`, and
+`latency_ms`. The CLI checks model/device channel compatibility, uses the profile's
+inference cadence, confidence gate, and debounce setting, and prints only accepted
+predictions. Inference uses an adjacent ONNX artifact automatically when available;
+otherwise it uses the Torch checkpoint.
+
+## Use real-time inference from Python
+
+HTTP is not required to access predictions. Create one `LiveEMGSession`, use its
+rolling windows as input to `InferenceService`, and consume the returned
+`Prediction` values in your own loop. The session owns the streamer acquisition
+worker for the lifetime of the `with` block.
+
+```python
+import time
+from dataclasses import replace
+
+from qgrip.profiles import load_profile
+from qgrip.streaming import LiveEMGSession, PredictionDebouncer, sample_rates_match
+from qgrip.workflows import InferenceService
+
+profile = load_profile("profile.json")
+model = InferenceService("data/demo/models/RUN/model.pt", profile.inference.backend)
+
+with LiveEMGSession(profile.device, profile.acquisition) as session:
+    if session.channels != model.channels:
+        raise ValueError("model and live stream have different channel counts")
+    if not sample_rates_match(session.sample_rate_hz, float(model.metadata["sample_rate_hz"])):
+        raise ValueError("model and live stream have different sample rates")
+
+    minimum_new_samples = max(
+        1, round(session.sample_rate_hz * profile.inference.inference_period_seconds)
+    )
+    debouncer = PredictionDebouncer(profile.inference.switch_predictions)
+
+    while True:
+        samples = session.next_window(model.window_size, minimum_new_samples)
+        if samples is None:
+            time.sleep(profile.inference.idle_poll_seconds)
+            continue
+
+        prediction = model.predict(samples)
+        if prediction.confidence < profile.inference.confidence_gate:
+            prediction = replace(prediction, gesture="rest")
+        accepted = debouncer.accept(prediction)
+        if accepted is not None:
+            print(accepted.gesture, accepted.confidence, accepted.activation)
+```
+
+`InferenceService.predict()` returns a `Prediction` with `gesture`, `confidence`,
+`activation`, and `latency_ms`. It maintains its own model-sized history, but callers
+should normally use `LiveEMGSession.next_window()` because it ensures a valid,
+contiguous rolling EMG window and resets after device gaps or consumer overruns.
+The loop above applies the same confidence gate and debounce behavior as CLI and
+dashboard live inference; omit those two steps if an application intentionally
+needs every raw model prediction.
+
+For a one-off, already-acquired window, instantiate `InferenceService` and call
+`predict()` directly with a tuple of per-sample, per-channel float tuples. A `.pt`
+checkpoint is the usual input. A `.onnx` path is also accepted, but its matching
+`.pt` checkpoint must be present for the self-describing metadata.
 
 Training is implemented directly in QGrip. The `transformer`, `cnn1d`, `cnn2d`,
 and `dense` presets share an `EMGPreprocessor` module that owns normalization and
