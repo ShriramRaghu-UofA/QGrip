@@ -123,11 +123,14 @@ Backend timestamps, packet sequences, capture boundaries, and SGT markers—not 
 timing—are authoritative.
 
 For every gesture, SGT can run a preparation countdown and an unlabelled practice segment.
-Recorded work is nested into trial and presentation segments. A proportional non-rest
-presentation prompts a triangle activation trajectory from 0 to 1 and back to 0; rest is
-always 0. A discrete presentation is 1 for a non-rest gesture and 0 for rest. Manual mode
-uses a condition-backed command gate for pause, resume, repeat, and abort. Repeated
-presentations are retained in the capture log but marked `presentation_superseded`.
+Proportional capture requires a subject calibration artifact containing the rest floor and
+per-class robust maximum references. Recorded work is nested into trial and presentation
+segments; non-rest gestures are presented at held stepped targets (25%, 50%, 75%, and
+100% by default), while rest is always 0. Each presentation carries both its prompted
+target and measured calibrated EMG activation. A discrete presentation is 1 for a
+non-rest gesture and 0 for rest. Manual mode uses a condition-backed command gate for
+pause, resume, repeat, and abort. Repeated presentations are retained in the capture log
+but marked `presentation_superseded`.
 
 The capture log is append-only and authoritative. A normal completion writes a terminal
 capture-stop record. An aborted or damaged log remains evidence but cannot be exported as a

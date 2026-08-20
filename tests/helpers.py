@@ -33,6 +33,11 @@ def write_profile(root: Path, *, handi: bool = False) -> Path:
             "practice": False,
             "proportional": True,
             "progress_interval_seconds": 0.01,
+            "activation_levels": [0.25, 0.5, 0.75, 1.0],
+            "activation_tolerance": 0.1,
+            "activation_smoothing_seconds": 0.05,
+            "calibration_rest_seconds": 0.01,
+            "calibration_max_seconds": 0.01,
         },
         "model": {"name": "dense", "architecture": {}},
         "training": {

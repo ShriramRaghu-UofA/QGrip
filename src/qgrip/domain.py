@@ -6,26 +6,12 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
-
-def activation_target(gesture: str, fraction: float) -> float:
-    """Triangle-ramp activation prompt over a normalized presentation fraction.
-
-    The proportional SGT "metronome" prompts the operator to ramp effort up and
-    then back down within a single hold: ``rest`` stays relaxed, while every
-    other gesture ramps linearly from ``0`` at the start up to a full
-    contraction at the midpoint and back to ``0`` at the end.  ``fraction`` is
-    the elapsed position in ``[0, 1]``.  The same helper drives the on-screen
-    prompt during capture and reconstructs the per-sample proxy label during
-    export, so the labels always match what the operator was asked to follow.
-    """
-    if gesture == "rest":
-        return 0.0
-    clamped = min(1.0, max(0.0, fraction))
-    return 1.0 - abs(2.0 * clamped - 1.0)
+DEFAULT_ACTIVATION_LEVELS: tuple[float, ...] = (0.25, 0.5, 0.75, 1.0)
 
 
 class DeviceKind(StrEnum):
     """Acquisition transports supported by a profile's :class:`DeviceConfig`."""
+
     SIFI = "sifi"
     MYO_BLE = "myo_ble"
     MYO_DONGLE = "myo_dongle"
@@ -34,6 +20,7 @@ class DeviceKind(StrEnum):
 
 class ModelName(StrEnum):
     """Model architectures that QGrip can construct and load from checkpoints."""
+
     TRANSFORMER = "transformer"
     CNN1D = "cnn1d"
     CNN2D = "cnn2d"
@@ -42,6 +29,7 @@ class ModelName(StrEnum):
 
 class InferenceBackend(StrEnum):
     """Runtime selection policy for a trained model artifact."""
+
     AUTO = "auto"
     TORCH = "torch"
     ONNX = "onnx"
@@ -49,6 +37,7 @@ class InferenceBackend(StrEnum):
 
 class NormalizationMode(StrEnum):
     """Raw-EMG scaling strategy embedded in the trained model graph."""
+
     WINDOW_ZSCORE = "window_zscore"
     SIGNED_8BIT = "signed_8bit"
     DATASET_STANDARDIZE = "dataset_standardize"
@@ -56,6 +45,7 @@ class NormalizationMode(StrEnum):
 
 class JobState(StrEnum):
     """Lifecycle state reported by :class:`~qgrip.workflows.WorkflowCoordinator`."""
+
     IDLE = "idle"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -65,6 +55,7 @@ class JobState(StrEnum):
 
 class SGTCommand(StrEnum):
     """Operator commands accepted while a manual SGT capture is awaiting input."""
+
     ABORT = "abort"
     PAUSE = "pause"
     RESUME = "resume"
@@ -73,6 +64,7 @@ class SGTCommand(StrEnum):
 
 class SignalHealthSeverity(StrEnum):
     """Ordered health assessment for a live acquisition stream."""
+
     HEALTHY = "healthy"
     WARNING = "warning"
     CRITICAL = "critical"
@@ -89,6 +81,7 @@ class DeviceConfig:
     ``address`` is used by SiFi and Myo BLE; ``port`` is used by SiFi and the
     Myo dongle. ``seed`` makes synthetic acquisition reproducible.
     """
+
     kind: DeviceKind = DeviceKind.SYNTHETIC
     sample_rate_hz: float = 200.0
     channels: int = 8
@@ -105,6 +98,7 @@ class HealthConfig:
     and loss limits may be set to ``None`` to disable that individual check.
     Rate ratios are measured against ``DeviceConfig.sample_rate_hz``.
     """
+
     window_seconds: float = 5.0
     stale_after_seconds: float | None = 2.0
     minimum_rate_ratio: float | None = 0.9
@@ -121,6 +115,7 @@ class AcquisitionConfig:
     the authoritative compressed log's frame size, flushing, compression, and
     boundary fsync behavior. ``ack_timeout_seconds`` bounds device startup.
     """
+
     ring_buffer_seconds: float = 10.0
     ack_timeout_seconds: float = 2.0
     capture_log_enabled: bool = True
@@ -138,8 +133,9 @@ class SGTConfig:
     ``gestures`` is an ordered, unique class list containing ``rest``. Each
     gesture is presented once per ``trials`` pass. ``duration_seconds`` is each
     recorded presentation; preparation and optional practice are unlabelled.
-    In proportional mode non-rest prompts use a triangle effort ramp.
+    In proportional mode non-rest prompts use calibrated, held activation levels.
     """
+
     gestures: tuple[str, ...] = (
         "rest",
         "close",
@@ -155,6 +151,11 @@ class SGTConfig:
     practice: bool = True
     proportional: bool = True
     progress_interval_seconds: float = 0.05
+    activation_levels: tuple[float, ...] = DEFAULT_ACTIVATION_LEVELS
+    activation_tolerance: float = 0.1
+    activation_smoothing_seconds: float = 0.1
+    calibration_rest_seconds: float = 4.0
+    calibration_max_seconds: float = 4.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,6 +166,7 @@ class ModelConfig:
     profiles and checkpoints have deterministic serialization. Valid keys depend
     on ``name`` and are enforced by the profile parser.
     """
+
     name: ModelName = ModelName.TRANSFORMER
     architecture: tuple[tuple[str, float | int], ...] = ()
 
@@ -178,6 +180,7 @@ class TrainingConfig:
     the model's defaults. The activation fields calibrate proportional targets
     from causal EMG energy, while ``normalization`` becomes model state.
     """
+
     epochs: int = 30
     batch_size: int = 128
     learning_rate: float = 1e-4
@@ -204,6 +207,7 @@ class InferenceConfig:
     adapters. A changed gesture must persist for ``switch_predictions`` model
     outputs before it is accepted. Poll/wait values control stream consumption.
     """
+
     backend: InferenceBackend = InferenceBackend.AUTO
     confidence_gate: float = 0.6
     inference_period_seconds: float = 1 / 60
@@ -215,6 +219,7 @@ class InferenceConfig:
 @dataclass(frozen=True, slots=True)
 class DashboardConfig:
     """Local dashboard bind address and optional standalone-Handi proxy target."""
+
     host: str = "127.0.0.1"
     port: int = 8765
     handi_url: str | None = None
@@ -224,6 +229,7 @@ class DashboardConfig:
 @dataclass(frozen=True, slots=True)
 class JointLimit:
     """Verified safe range and startup position for one Handi joint."""
+
     name: str
     minimum: float
     maximum: float
@@ -237,6 +243,7 @@ class JointLimit:
 @dataclass(frozen=True, slots=True)
 class GripPreset:
     """Named multi-joint target pose used by a Handi gesture mapping."""
+
     name: str
     positions: tuple[tuple[str, float], ...]
 
@@ -249,6 +256,7 @@ class HandiConfig:
     is clamped to those limits. ``step`` is the maximum full-activation delta
     for mapped ``open`` and ``close`` actions; named mappings select a preset.
     """
+
     enabled: bool = False
     rpc_socket: str = "/var/run/arduino-router.sock"
     rpc_timeout_seconds: float = 1.0
@@ -272,6 +280,7 @@ class QGripProfile:
     relative to the profile file. Construct profiles through ``load_profile`` so
     the schema, cross-field constraints, and relative-path semantics are kept.
     """
+
     schema_version: int
     path: Path
     data_root: Path
@@ -289,6 +298,7 @@ class QGripProfile:
 @dataclass(frozen=True, slots=True)
 class SGTRequest:
     """Typed request to run screen-guided capture for one validated subject."""
+
     subject: str
     profile: QGripProfile
     proportional: bool
@@ -298,6 +308,7 @@ class SGTRequest:
 @dataclass(frozen=True, slots=True)
 class SGTProgress:
     """Incremental SGT state used by CLI, HTTP, and UI progress adapters."""
+
     state: JobState
     gesture: str | None = None
     stage: str | None = None
@@ -308,6 +319,8 @@ class SGTProgress:
     elapsed_seconds: float = 0.0
     duration_seconds: float = 0.0
     activation: float = 0.0
+    measured_activation: float = 0.0
+    in_tolerance: bool = False
     capture: Path | None = None
     error: str | None = None
     awaiting_command: bool = False
@@ -316,6 +329,7 @@ class SGTProgress:
 @dataclass(frozen=True, slots=True)
 class ArtifactMetadata:
     """Validated identity and completeness metadata for a capture or Parquet artifact."""
+
     path: Path
     kind: str
     subject: str
@@ -331,6 +345,7 @@ class ArtifactMetadata:
 @dataclass(frozen=True, slots=True)
 class TrainingRequest:
     """Typed request selecting training inputs, architecture, and output mode."""
+
     subject: str
     profile: QGripProfile
     inputs: tuple[Path, ...]
@@ -341,6 +356,7 @@ class TrainingRequest:
 @dataclass(frozen=True, slots=True)
 class EpochMetric:
     """Loss and accuracy values recorded after one training epoch."""
+
     epoch: int
     loss: float
     accuracy: float
@@ -380,6 +396,7 @@ class TrainingSummary:
 @dataclass(frozen=True, slots=True)
 class Prediction:
     """One classifier output: winning gesture, confidence, and proportional effort."""
+
     gesture: str
     confidence: float
     activation: float
@@ -402,6 +419,7 @@ class LiveSignalHealth:
 @dataclass(frozen=True, slots=True)
 class ControllerState:
     """Observable state of the independently owned Handi runtime and controller."""
+
     running: bool = False
     healthy: bool = True
     positions: tuple[tuple[str, float], ...] = ()
@@ -413,6 +431,7 @@ class ControllerState:
 @dataclass(frozen=True, slots=True)
 class Health:
     """Readiness result for the device, model, and Handi RPC dependencies."""
+
     ok: bool
     device: bool
     model: bool
@@ -423,18 +442,22 @@ class Health:
 @dataclass(frozen=True, slots=True)
 class JobStatus:
     """Authoritative coordinator snapshot for the single process-local workflow job."""
+
     id: str
     kind: str
     state: JobState
     progress: float = 0.0
     message: str = ""
     gesture: str | None = None
+    trial: int = 0
     stage: str | None = None
     instruction: str | None = None
     stimulus_image: str | None = None
     elapsed_seconds: float = 0.0
     duration_seconds: float = 0.0
     activation: float = 0.0
+    measured_activation: float = 0.0
+    in_tolerance: bool = False
     result: str | None = None
     metrics: tuple[EpochMetric, ...] = field(default_factory=tuple)
     training_summary: TrainingSummary | None = None

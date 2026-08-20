@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 import uuid
@@ -10,13 +11,16 @@ from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from sifi_streamer.acquisition import create_capture_runtime
 
 from qgrip.artifacts import (
+    calibration_path,
+    derive_calibration,
     export_capture,
+    load_calibration,
     new_capture_path,
 )
 from qgrip.domain import (
@@ -30,10 +34,10 @@ from qgrip.domain import (
     SGTRequest,
     TrainingRequest,
     TrainingSummary,
-    activation_target,
 )
 from qgrip.errors import ArtifactError, BusyError
 from qgrip.streaming import (
+    EMG_STREAM_ID,
     LiveEMGSession,
     PredictionDebouncer,
     sample_rates_match,
@@ -80,8 +84,88 @@ class SGTCommandGate:
             return self._pending.popleft()
 
 
+class CalibrationService:
+    """Record and derive the subject-specific EMG activation calibration."""
+
+    def run(
+        self,
+        subject: str,
+        profile: QGripProfile,
+        cancel: threading.Event,
+        progress: ProgressCallback | None = None,
+    ) -> Path:
+        output = new_capture_path(profile, subject)
+        runtime = create_capture_runtime(
+            output,
+            output.stem,
+            streamer_device_factory(profile.device),
+            {
+                "experiment": "sgt_activation_calibration",
+                "subject": subject,
+                "created_at": datetime.now(UTC).isoformat(),
+                "device": profile.device.kind,
+                "sample_rate_hz": profile.device.sample_rate_hz,
+                "channels": profile.device.channels,
+                "classes": ",".join(profile.sgt.gestures),
+                "proportional": True,
+            },
+            config=streamer_config(profile.acquisition),
+        )
+        reason = "aborted"
+        try:
+            with runtime.controller:
+                labels = ("rest", *(g for g in profile.sgt.gestures if g != "rest"))
+                for index, gesture in enumerate(labels, start=1):
+                    seconds = (
+                        profile.sgt.calibration_rest_seconds
+                        if gesture == "rest"
+                        else profile.sgt.calibration_max_seconds
+                    )
+                    segment_id = f"calibration-{index:03d}"
+                    runtime.controller.start_segment(segment_id, "calibration", label=gesture)
+                    started = time.monotonic()
+                    try:
+                        while (elapsed := time.monotonic() - started) < seconds:
+                            if progress:
+                                progress(
+                                    SGTProgress(
+                                        JobState.RUNNING,
+                                        gesture=gesture,
+                                        stage="calibration",
+                                        instruction=(
+                                            "Relax completely."
+                                            if gesture == "rest"
+                                            else f"Perform maximum {gesture.replace('_', ' ')}."
+                                        ),
+                                        stimulus_image=_stimulus_image(profile, gesture),
+                                        trial=index,
+                                        total_trials=len(labels),
+                                        elapsed_seconds=elapsed,
+                                        duration_seconds=seconds,
+                                        capture=output,
+                                    )
+                                )
+                            if cancel.wait(
+                                min(profile.sgt.progress_interval_seconds, seconds - elapsed)
+                            ):
+                                raise InterruptedError("calibration cancelled")
+                    finally:
+                        runtime.controller.stop_segment(
+                            segment_id, "completed" if not cancel.is_set() else "aborted"
+                        )
+                reason = "normal_completion"
+        finally:
+            if runtime.controller.started:
+                runtime.controller.close(reason)
+        result = derive_calibration(output, profile, calibration_path(profile, subject))
+        if progress:
+            progress(SGTProgress(JobState.COMPLETED, stage="calibration", capture=result))
+        return result
+
+
 class SGTService:
     """Record authoritative screen-guided-training captures through streamer APIs."""
+
     def run(
         self,
         request: SGTRequest,
@@ -91,22 +175,37 @@ class SGTService:
     ) -> Path:
         """Run one capture plan, emitting UI progress and honoring cooperative cancellation."""
         profile = request.profile
+        calibration = (
+            load_calibration(calibration_path(profile, request.subject), profile)
+            if request.proportional
+            else None
+        )
         output = new_capture_path(profile, request.subject)
-        total = len(profile.sgt.gestures) * profile.sgt.trials
+        total = profile.sgt.trials * (
+            1 + (len(profile.sgt.gestures) - 1) * len(profile.sgt.activation_levels)
+            if request.proportional
+            else len(profile.sgt.gestures)
+        )
+        capture_attributes: dict[str, object] = {
+            "experiment": "screen_guided_training",
+            "subject": request.subject,
+            "created_at": datetime.now(UTC).isoformat(),
+            "device": profile.device.kind,
+            "sample_rate_hz": profile.device.sample_rate_hz,
+            "channels": profile.device.channels,
+            "classes": ",".join(profile.sgt.gestures),
+            "proportional": request.proportional,
+        }
+        if calibration is not None:
+            capture_attributes.update(
+                calibration_rest_floor=calibration["rest_floor"],
+                calibration_class_references=json.dumps(calibration["class_references"]),
+            )
         runtime = create_capture_runtime(
             output,
             output.stem,
             streamer_device_factory(profile.device),
-            {
-                "experiment": "screen_guided_training",
-                "subject": request.subject,
-                "created_at": datetime.now(UTC).isoformat(),
-                "device": profile.device.kind,
-                "sample_rate_hz": profile.device.sample_rate_hz,
-                "channels": profile.device.channels,
-                "classes": ",".join(profile.sgt.gestures),
-                "proportional": request.proportional,
-            },
+            cast(Any, capture_attributes),
             config=streamer_config(profile.acquisition),
         )
         reason = "aborted"
@@ -115,20 +214,55 @@ class SGTService:
                 segment_sequence = 0
                 recorded_presentation = 0
                 paused = False
+                stream_cursor = 0
+                measurement_history: deque[np.ndarray] = deque(
+                    maxlen=max(
+                        1,
+                        round(
+                            profile.device.sample_rate_hz
+                            * profile.sgt.activation_smoothing_seconds
+                        ),
+                    )
+                )
+                last_measured_activation = 0.0
 
-                def prompt_at(gesture: str, elapsed: float) -> float:
-                    """Activation the operator is asked to hold at ``elapsed`` seconds.
+                def measured_activation(gesture: str) -> float:
+                    """Read and normalize the newest causal EMG energy window."""
+                    nonlocal last_measured_activation, stream_cursor
+                    if not request.proportional or gesture == "rest" or calibration is None:
+                        return 0.0
+                    window_samples = max(
+                        1,
+                        round(
+                            profile.device.sample_rate_hz * profile.sgt.activation_smoothing_seconds
+                        ),
+                    )
+                    window = runtime.monitor.read_since(
+                        EMG_STREAM_ID, stream_cursor, max_samples=window_samples
+                    )
+                    if window is None:
+                        return last_measured_activation
+                    stream_cursor = window.end_index
+                    valid = window.samples[np.asarray(window.validity, dtype=bool)]
+                    if valid.size == 0:
+                        return last_measured_activation
+                    measurement_history.extend(valid)
+                    energy = float(
+                        np.sqrt(np.mean(np.var(np.asarray(measurement_history), axis=0)))
+                    )
+                    rest = float(cast(float, calibration["rest_floor"]))
+                    references = cast(dict[str, object], calibration["class_references"])
+                    reference = float(cast(float, references[gesture]))
+                    if reference <= rest:
+                        return last_measured_activation
+                    last_measured_activation = float(
+                        np.clip((energy - rest) / (reference - rest), 0.0, 1.0)
+                    )
+                    return last_measured_activation
 
-                    Proportional capture sweeps a triangle ramp so a single hold
-                    covers the whole activation range; the identical shape is
-                    reconstructed per sample during export to label training.
-                    Non-proportional capture holds a flat full contraction.
-                    """
-                    if not request.proportional:
-                        return 0.0 if gesture == "rest" else 1.0
-                    duration = profile.sgt.duration_seconds
-                    fraction = elapsed / duration if duration > 0 else 0.0
-                    return activation_target(gesture, fraction)
+                def prompt_at(gesture: str, target: float) -> float:
+                    """Return the held target for one stepped presentation."""
+                    return 0.0 if gesture == "rest" else target
 
                 def run_preparation(gesture: str) -> None:
                     """Give the operator a brief get-ready countdown before a prompt.
@@ -163,7 +297,7 @@ class SGTService:
                         ):
                             raise InterruptedError("capture cancelled")
 
-                def run_unrecorded_stage(kind: str, gesture: str) -> None:
+                def run_unrecorded_stage(kind: str, gesture: str, target: float = 0.0) -> None:
                     """Capture practice evidence without training labels.
 
                     The practice stage mirrors the recorded presentation prompt so
@@ -184,7 +318,7 @@ class SGTService:
                                 stimulus_image=_stimulus_image(profile, gesture),
                                 total_trials=total,
                                 duration_seconds=profile.sgt.duration_seconds,
-                                activation=prompt_at(gesture, 0.0),
+                                activation=target,
                                 capture=output,
                             )
                         )
@@ -213,7 +347,7 @@ class SGTService:
                                         total_trials=total,
                                         elapsed_seconds=elapsed,
                                         duration_seconds=profile.sgt.duration_seconds,
-                                        activation=prompt_at(gesture, elapsed),
+                                        activation=target,
                                         capture=output,
                                     )
                                 )
@@ -224,14 +358,21 @@ class SGTService:
 
                 if profile.sgt.practice:
                     for gesture in profile.sgt.gestures:
-                        run_preparation(gesture)
-                        run_unrecorded_stage("practice", gesture)
+                        practice_targets = (
+                            (0.0,)
+                            if gesture == "rest" or not request.proportional
+                            else profile.sgt.activation_levels
+                        )
+                        for target in practice_targets:
+                            run_preparation(gesture)
+                            run_unrecorded_stage("practice", gesture, target)
 
                 def emit_presentation(
                     gesture: str,
                     trial_index: int,
                     activation: float,
                     elapsed: float,
+                    measured: float = 0.0,
                     *,
                     awaiting: bool = False,
                 ) -> None:
@@ -250,6 +391,10 @@ class SGTService:
                             elapsed_seconds=elapsed,
                             duration_seconds=profile.sgt.duration_seconds,
                             activation=activation,
+                            measured_activation=measured,
+                            in_tolerance=(
+                                abs(measured - activation) <= profile.sgt.activation_tolerance
+                            ),
                             capture=output,
                             awaiting_command=awaiting,
                         )
@@ -298,50 +443,56 @@ class SGTService:
                             paused = True
 
                 def present_gesture(gesture: str, trial: int) -> None:
-                    """Record one presentation and repeat it only on operator request."""
+                    """Record each held activation level and support repetition."""
                     nonlocal segment_sequence, recorded_presentation
                     duration = profile.sgt.duration_seconds
-                    peak = prompt_at(gesture, duration / 2)
-                    while True:
-                        if cancel.is_set():
-                            raise InterruptedError("capture cancelled")
-                        run_preparation(gesture)
-                        segment_sequence += 1
-                        trial_index = recorded_presentation + 1
-                        emit_presentation(gesture, trial_index, prompt_at(gesture, 0.0), 0.0)
-                        presentation_id = runtime.controller.start_segment(
-                            f"presentation-{trial:03d}-{segment_sequence:03d}",
-                            "presentation",
-                            label=gesture,
-                            trial=trial,
-                            activation=peak,
-                        )
-                        runtime.controller.marker(
-                            presentation_id,
-                            "activation_target",
-                            label=gesture,
-                            activation=peak,
-                        )
-                        started = time.monotonic()
-                        while (elapsed := time.monotonic() - started) < duration:
-                            if cancel.wait(
-                                min(
-                                    profile.sgt.progress_interval_seconds,
-                                    duration - elapsed,
-                                )
-                            ):
+                    targets = (
+                        (0.0,)
+                        if gesture == "rest" or not request.proportional
+                        else profile.sgt.activation_levels
+                    )
+                    for target in targets:
+                        while True:
+                            if cancel.is_set():
                                 raise InterruptedError("capture cancelled")
-                            emit_presentation(
-                                gesture, trial_index, prompt_at(gesture, elapsed), elapsed
+                            run_preparation(gesture)
+                            segment_sequence += 1
+                            trial_index = recorded_presentation + 1
+                            emit_presentation(gesture, trial_index, target, 0.0)
+                            presentation_id = runtime.controller.start_segment(
+                                f"presentation-{trial:03d}-{segment_sequence:03d}",
+                                "presentation",
+                                label=gesture,
+                                trial=trial,
+                                activation=target,
                             )
-                        runtime.controller.stop_segment(presentation_id, "completed")
-                        if await_gate(gesture, trial_index, peak) == "repeat":
                             runtime.controller.marker(
-                                presentation_id, "presentation_superseded", label=gesture
+                                presentation_id,
+                                "activation_target",
+                                label=gesture,
+                                activation=target,
                             )
-                            continue
-                        recorded_presentation = trial_index
-                        return
+                            started = time.monotonic()
+                            while (elapsed := time.monotonic() - started) < duration:
+                                if cancel.wait(
+                                    min(profile.sgt.progress_interval_seconds, duration - elapsed)
+                                ):
+                                    raise InterruptedError("capture cancelled")
+                                emit_presentation(
+                                    gesture,
+                                    trial_index,
+                                    target,
+                                    elapsed,
+                                    measured_activation(gesture),
+                                )
+                            runtime.controller.stop_segment(presentation_id, "completed")
+                            if await_gate(gesture, trial_index, target) == "repeat":
+                                runtime.controller.marker(
+                                    presentation_id, "presentation_superseded", label=gesture
+                                )
+                                continue
+                            recorded_presentation = trial_index
+                            break
 
                 for trial in range(1, profile.sgt.trials + 1):
                     trial_id = runtime.controller.start_segment(
@@ -515,11 +666,15 @@ class WorkflowCoordinator:
     """Owns service threads and enforces one hardware operation per process."""
 
     def __init__(
-        self, sgt: SGTService | None = None, training: TrainingService | None = None
+        self,
+        sgt: SGTService | None = None,
+        training: TrainingService | None = None,
+        calibration: CalibrationService | None = None,
     ) -> None:
         """Create the single-job coordinator with replaceable service facades."""
         self.sgt = sgt or SGTService()
         self.training = training or TrainingService()
+        self.calibration = calibration or CalibrationService()
         # A Condition (rather than a plain Lock) lets SSE clients block until the
         # status actually changes instead of polling on a fixed interval.
         self._lock = threading.Condition()
@@ -598,17 +753,53 @@ class WorkflowCoordinator:
                         progress=min(0.99, current),
                         message=value.instruction or value.gesture or "",
                         gesture=value.gesture,
+                        trial=value.trial,
                         stage=value.stage,
                         instruction=value.instruction,
                         stimulus_image=value.stimulus_image,
                         elapsed_seconds=value.elapsed_seconds,
                         duration_seconds=value.duration_seconds,
                         activation=value.activation,
+                        measured_activation=value.measured_activation,
+                        in_tolerance=value.in_tolerance,
                         awaiting_command=value.awaiting_command,
                     )
                     self._notify()
 
         return self._begin("sgt", lambda: str(self.sgt.run(request, self._cancel, update, gate)))
+
+    def start_calibration(self, subject: str, profile: QGripProfile) -> JobStatus:
+        """Start the exclusive subject activation calibration workflow."""
+
+        def update(value: SGTProgress) -> None:
+            with self._lock:
+                if self._status:
+                    self._status = replace(
+                        self._status,
+                        progress=value.trial / max(1, value.total_trials),
+                        message=value.instruction or value.gesture or "",
+                        gesture=value.gesture,
+                        trial=value.trial,
+                        stage=value.stage,
+                        instruction=value.instruction,
+                        stimulus_image=value.stimulus_image,
+                        elapsed_seconds=value.elapsed_seconds,
+                        duration_seconds=value.duration_seconds,
+                        activation=value.activation,
+                        measured_activation=value.measured_activation,
+                        in_tolerance=value.in_tolerance,
+                        result=(
+                            str(value.capture)
+                            if value.state == JobState.COMPLETED and value.capture
+                            else None
+                        ),
+                    )
+                    self._notify()
+
+        return self._begin(
+            "calibration",
+            lambda: str(self.calibration.run(subject, profile, self._cancel, update)),
+        )
 
     def send_sgt_command(self, command: SGTCommand) -> None:
         """Forward an interactive Screen Guided Training control command."""

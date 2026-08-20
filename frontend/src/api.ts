@@ -17,12 +17,15 @@ export interface JobStatus {
   progress?: number;
   message?: string;
   gesture?: string;
+  trial?: number;
   stage?: string;
   instruction?: string;
   stimulus_image?: string;
   elapsed_seconds?: number;
   duration_seconds?: number;
   activation?: number;
+  measured_activation?: number;
+  in_tolerance?: boolean;
   result?: string;
   prediction?: Prediction;
   metrics?: EpochMetric[];

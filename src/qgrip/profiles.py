@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from qgrip.domain import (
+    DEFAULT_ACTIVATION_LEVELS,
     AcquisitionConfig,
     DashboardConfig,
     DeviceConfig,
@@ -239,6 +240,11 @@ def _parse_sgt(raw: object) -> SGTConfig:
             "practice",
             "proportional",
             "progress_interval_seconds",
+            "activation_levels",
+            "activation_tolerance",
+            "activation_smoothing_seconds",
+            "calibration_rest_seconds",
+            "calibration_max_seconds",
         },
         "sgt",
     )
@@ -264,6 +270,11 @@ def _parse_sgt(raw: object) -> SGTConfig:
     preparation_seconds = _finite(data.get("preparation_seconds", 3), "sgt.preparation_seconds")
     if preparation_seconds < 0:
         raise ValidationError("sgt.preparation_seconds must be non-negative")
+    activation_tolerance = _finite(
+        data.get("activation_tolerance", 0.1), "sgt.activation_tolerance"
+    )
+    if activation_tolerance <= 0 or activation_tolerance > 1:
+        raise ValidationError("sgt.activation_tolerance must be in (0, 1]")
     return SGTConfig(
         gestures=gestures,
         trials=_integer(data.get("trials", 3), "sgt.trials", minimum=1),
@@ -278,7 +289,33 @@ def _parse_sgt(raw: object) -> SGTConfig:
             "sgt.progress_interval_seconds",
             positive=True,
         ),
+        activation_levels=_activation_levels(data.get("activation_levels")),
+        activation_tolerance=activation_tolerance,
+        activation_smoothing_seconds=_finite(
+            data.get("activation_smoothing_seconds", 0.1),
+            "sgt.activation_smoothing_seconds",
+            positive=True,
+        ),
+        calibration_rest_seconds=_finite(
+            data.get("calibration_rest_seconds", 4), "sgt.calibration_rest_seconds", positive=True
+        ),
+        calibration_max_seconds=_finite(
+            data.get("calibration_max_seconds", 4), "sgt.calibration_max_seconds", positive=True
+        ),
     )
+
+
+def _activation_levels(raw: object) -> tuple[float, ...]:
+    """Validate the canonical ascending proportional target levels."""
+    values = list(DEFAULT_ACTIVATION_LEVELS) if raw is None else raw
+    if not isinstance(values, list) or not values:
+        raise ValidationError("sgt.activation_levels must be a non-empty list")
+    levels = tuple(_finite(value, "sgt.activation_levels") for value in values)
+    if any(level <= 0 or level > 1 for level in levels) or tuple(sorted(set(levels))) != levels:
+        raise ValidationError(
+            "sgt.activation_levels must be unique and strictly ascending in (0, 1]"
+        )
+    return levels
 
 
 def _parse_model(raw: object) -> ModelConfig:
@@ -690,6 +727,11 @@ def default_profile(kind: DeviceKind | str = DeviceKind.SYNTHETIC) -> dict[str, 
             "practice": True,
             "proportional": True,
             "progress_interval_seconds": 0.05,
+            "activation_levels": list(DEFAULT_ACTIVATION_LEVELS),
+            "activation_tolerance": 0.1,
+            "activation_smoothing_seconds": 0.1,
+            "calibration_rest_seconds": 4,
+            "calibration_max_seconds": 4,
         },
         "model": {"name": "transformer", "architecture": {}},
         "training": {

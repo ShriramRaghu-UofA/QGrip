@@ -9,7 +9,7 @@ from pathlib import Path
 import pyarrow.parquet as pq
 from sifi_streamer.capture import CaptureLogWriter
 
-from qgrip.artifacts import export_capture, read_capture
+from qgrip.artifacts import calibration_path, export_capture, read_capture, write_calibration_atomic
 from qgrip.domain import (
     JobState,
     ModelName,
@@ -31,6 +31,22 @@ from tests.helpers import write_profile
 
 
 class SyntheticWorkflowTests(unittest.TestCase):
+    def calibrate(self, profile, subject: str) -> None:
+        """Create the canonical calibration artifact for proportional SGT tests."""
+        write_calibration_atomic(
+            calibration_path(profile, subject),
+            {
+                "version": 1,
+                "capture": "synthetic-test-calibration",
+                "sample_rate_hz": profile.device.sample_rate_hz,
+                "channels": profile.device.channels,
+                "rest_floor": 1.0,
+                "class_references": {
+                    gesture: 10.0 for gesture in profile.sgt.gestures if gesture != "rest"
+                },
+            },
+        )
+
     def test_export_uses_accepted_presentation_semantics(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             capture = Path(directory) / "session.capture.jsonl.zst"
@@ -70,7 +86,7 @@ class SyntheticWorkflowTests(unittest.TestCase):
             self.assertEqual(table.num_rows, 1)
             self.assertEqual(table.column("gesture")[0].as_py(), "close")
 
-    def test_export_reconstructs_triangle_activation_labels(self) -> None:
+    def test_export_preserves_held_activation_labels(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             capture = Path(directory) / "session.capture.jsonl.zst"
             attributes = {
@@ -103,8 +119,8 @@ class SyntheticWorkflowTests(unittest.TestCase):
                 writer.stop_segment("trial-001", "completed")
             table = pq.read_table(export_capture(capture, activation_energy_window_seconds=0.1))
             activations = table.column("activation").to_pylist()
-            # Five ordered samples sweep the triangle: 0 → 0.5 → 1 → 0.5 → 0.
-            self.assertEqual([round(value, 3) for value in activations], [0.0, 0.5, 1.0, 0.5, 0.0])
+            # A presentation is one held target, not a reconstructed trajectory.
+            self.assertEqual([round(value, 3) for value in activations], [1.0] * 5)
             self.assertEqual(table.column_names[-1], "activation_energy")
             self.assertIn("sample_rate_hz", table.column_names)
             self.assertNotIn("sample_rate", table.column_names)
@@ -116,6 +132,7 @@ class SyntheticWorkflowTests(unittest.TestCase):
     def test_capture_export_train_and_infer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             profile = load_profile(write_profile(Path(directory)))
+            self.calibrate(profile, "subject-1")
             capture = SGTService().run(SGTRequest("subject-1", profile, True), threading.Event())
             metadata, rows = read_capture(capture)
             rows = list(rows)
@@ -194,6 +211,7 @@ class SyntheticWorkflowTests(unittest.TestCase):
     def test_sgt_reports_practice_and_presentation_stimuli(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             profile = load_profile(write_profile(Path(directory)))
+            self.calibrate(profile, "s")
             profile = replace(profile, sgt=replace(profile.sgt, practice=True))
             progress = []
             SGTService().run(SGTRequest("s", profile, True), threading.Event(), progress.append)
@@ -220,6 +238,7 @@ class SyntheticWorkflowTests(unittest.TestCase):
     def test_preparation_precedes_each_recorded_presentation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             profile = load_profile(write_profile(Path(directory)))
+            self.calibrate(profile, "s")
             progress: list[SGTProgress] = []
             SGTService().run(SGTRequest("s", profile, False), threading.Event(), progress.append)
             # Collapse the repeated progress ticks into ordered, distinct stage runs.
@@ -238,6 +257,7 @@ class SyntheticWorkflowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             profile = load_profile(write_profile(Path(directory)))
             profile = replace(profile, sgt=replace(profile.sgt, preparation_seconds=0.0))
+            self.calibrate(profile, "s")
             progress: list[SGTProgress] = []
             SGTService().run(SGTRequest("s", profile, True), threading.Event(), progress.append)
             self.assertFalse(any(item.stage == "preparation" for item in progress))
@@ -266,6 +286,7 @@ class SyntheticWorkflowTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             profile = load_profile(write_profile(Path(directory)))
+            self.calibrate(profile, "s")
             coordinator = WorkflowCoordinator(sgt=ReportingSGT())
             try:
                 coordinator.start_sgt(SGTRequest("s", profile, True))
@@ -284,6 +305,7 @@ class SyntheticWorkflowTests(unittest.TestCase):
     def test_manual_sgt_gate_waits_and_supports_repeat(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             profile = load_profile(write_profile(Path(directory)))
+            self.calibrate(profile, "s")
             gate = SGTCommandGate()
             events: list[SGTProgress] = []
             repeated = {"done": False}

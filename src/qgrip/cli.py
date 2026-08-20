@@ -20,7 +20,7 @@ from qgrip.errors import QGripError, ValidationError
 from qgrip.handi import HandiRuntime
 from qgrip.profiles import default_profile, load_profile, profile_document, write_profile_atomic
 from qgrip.streaming import LiveEMGSession, PredictionDebouncer, check_streamer_device
-from qgrip.workflows import InferenceService, SGTService, TrainingService
+from qgrip.workflows import CalibrationService, InferenceService, SGTService, TrainingService
 
 
 def _profile_argument(parser: argparse.ArgumentParser) -> None:
@@ -67,6 +67,10 @@ def build_parser() -> argparse.ArgumentParser:
     sgt.add_argument("subject")
     _profile_argument(sgt)
     sgt.add_argument("--discrete", action="store_true")
+
+    calibration = commands.add_parser("sgt-calibrate", help="calibrate proportional SGT activation")
+    calibration.add_argument("subject")
+    _profile_argument(calibration)
 
     export = commands.add_parser("export", help="derive Parquet from capture logs")
     export.add_argument("subject")
@@ -176,6 +180,8 @@ def dispatch(args: argparse.Namespace) -> int:
             SGTRequest(args.subject, profile, not args.discrete), threading.Event()
         )
         print(path)
+    elif args.command == "sgt-calibrate":
+        print(CalibrationService().run(args.subject, profile, threading.Event()))
     elif args.command == "export":
         captures = args.captures or [latest_capture(profile, args.subject)]
         for capture in captures:

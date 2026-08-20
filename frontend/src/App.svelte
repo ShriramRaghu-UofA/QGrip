@@ -59,6 +59,7 @@
   const stageIndex = $derived(stages.indexOf(stage));
   const progress = $derived(Math.round((status.progress ?? 0) * 100));
   const sgtRunning = $derived(status.kind === 'sgt' && status.state === 'running');
+  const calibrationRunning = $derived(status.kind === 'calibration' && status.state === 'running');
   const inferenceRunning = $derived(status.kind === 'inference' && status.state === 'running');
   const awaiting = $derived(!!status.awaiting_command);
   const stimulusUrl = $derived(
@@ -67,16 +68,18 @@
   const gestureLabel = $derived((status.gesture ?? '').replace(/_/g, ' '));
   const duration = $derived(status.duration_seconds ?? 0);
   const timedStage = $derived(
-    sgtRunning &&
+    (sgtRunning || calibrationRunning) &&
       !awaiting &&
       duration > 0 &&
-      ['preparation', 'presentation', 'practice'].includes(status.stage ?? '')
+      ['calibration', 'preparation', 'presentation', 'practice'].includes(status.stage ?? '')
   );
   const preparing = $derived(status.stage === 'preparation');
   const countdownPercent = $derived(
     duration > 0 ? Math.min(100, Math.round((100 * localElapsed) / duration)) : 0
   );
   const countdownRemaining = $derived(Math.max(0, duration - localElapsed));
+  const targetPercent = $derived(Math.round((status.activation ?? 0) * 100));
+  const measuredPercent = $derived(Math.round((status.measured_activation ?? 0) * 100));
 
   // Training telemetry surfaced on the Train stage.
   const latestMetric = $derived(status.metrics?.at(-1));
@@ -110,7 +113,7 @@
 
   // Drive the countdown locally whenever a new timed stimulus begins.
   $effect(() => {
-    const key = `${status.kind}|${status.stage}|${status.gesture}|${status.progress}`;
+    const key = `${status.kind}|${status.stage}|${status.gesture}|${status.trial}|${status.activation}|${status.duration_seconds}`;
     if (timedStage) {
       if (key !== phaseKey) {
         phaseKey = key;
@@ -264,6 +267,11 @@
     void start('/api/v1/sgt/start', { subject, discrete: false, auto: autoMode }, '/api/v1/sgt/status');
   }
 
+  /** Start the canonical subject activation calibration. */
+  function startCalibration(): void {
+    void start('/api/v1/sgt/calibration/start', { subject }, '/api/v1/sgt/calibration/status');
+  }
+
   /** Move between workflow panels with Alt+left and Alt+right keyboard shortcuts. */
   function handleKeys(event: KeyboardEvent): void {
     if (event.altKey && event.key === 'ArrowRight')
@@ -351,14 +359,14 @@
           <div class="card-actions justify-end"><button class="btn btn-primary" onclick={() => { void loadArtifacts(); stage = 'Collect'; }}>Continue</button></div>
         </StagePanel>
       {:else if stage === 'Collect'}
-        <StagePanel title="Collect" description="Follow each prompt. Auto mode paces you automatically; manual mode waits for you after every stimulus." active>
+        <StagePanel title="Collect" description="Calibrate the subject, then follow the stepped target levels. Auto mode paces you automatically; manual mode waits after every hold." active>
           <div class="flex flex-wrap items-center justify-between gap-3">
             <label class="label cursor-pointer gap-3">
               <span class={['label-text', !autoMode && 'font-semibold']}>Manual</span>
               <input type="checkbox" class="toggle toggle-primary" bind:checked={autoMode} disabled={sgtRunning} aria-label="Auto advance" />
               <span class={['label-text', autoMode && 'font-semibold']}>Auto</span>
             </label>
-            <span class="badge badge-primary badge-outline">{awaiting ? 'Waiting for you' : (status.stage ?? (sgtRunning ? 'Running' : 'Ready'))}</span>
+            <span class="badge badge-primary badge-outline">{awaiting ? 'Waiting for you' : (status.stage ?? ((sgtRunning || calibrationRunning) ? 'Running' : 'Ready'))}</span>
           </div>
 
           <div class="rounded-box border border-base-300 bg-base-200 p-6 text-center">
@@ -375,7 +383,7 @@
               {/if}
             </div>
 
-            {#if sgtRunning && !awaiting && duration > 0}
+            {#if (sgtRunning || calibrationRunning) && !awaiting && duration > 0}
               <div class="mt-6 space-y-1 text-left">
                 <div class="flex justify-between text-sm"><span>{preparing ? 'Get ready' : 'Hold the gesture'}</span><span>{countdownRemaining.toFixed(1)} s</span></div>
                 <progress class={['progress w-full', preparing ? 'progress-warning' : 'progress-accent']} value={countdownPercent} max="100"></progress>
@@ -388,8 +396,13 @@
             <progress class="progress progress-primary w-full" value={progress} max="100"></progress>
             {#if ['presentation', 'practice'].includes(status.stage ?? '') && !awaiting}
               <div class="mt-2 space-y-1">
-                <div class="flex justify-between text-sm text-base-content/70"><span>Activation target</span><span>{Math.round((status.activation ?? 0) * 100)}%</span></div>
-                <progress class="progress progress-secondary w-full" value={Math.round((status.activation ?? 0) * 100)} max="100"></progress>
+                <div class="flex justify-between text-sm text-base-content/70"><span>Target</span><span>{targetPercent}%</span></div>
+                <progress class="progress progress-secondary w-full" value={targetPercent} max="100"></progress>
+                <div class="flex justify-between text-sm text-base-content/70"><span>Measured EMG</span><span>{measuredPercent}%</span></div>
+                <progress class="progress progress-accent w-full" value={measuredPercent} max="100"></progress>
+                <div class={['text-xs', status.in_tolerance ? 'text-success' : 'text-warning']}>
+                  {status.in_tolerance ? 'Within target band' : 'Outside target band'}
+                </div>
               </div>
             {/if}
           </div>
@@ -401,7 +414,9 @@
               {#if capturePath}<button class="btn btn-secondary" onclick={() => void start('/api/v1/export/start', { capture: capturePath }, '/api/v1/export/status')}>Export Parquet</button>{/if}
             </div>
             <div class="flex gap-2">
-              {#if sgtRunning}
+              {#if calibrationRunning}
+                <button class="btn btn-error btn-outline" onclick={() => void api.sgtCommand('abort')}>Abort calibration</button>
+              {:else if sgtRunning}
                 {#if awaiting}
                   <button class="btn btn-warning" onclick={() => void api.sgtCommand('repeat')}>Repeat</button>
                   <button class="btn btn-primary" onclick={() => void api.sgtCommand('resume')}>Proceed</button>
@@ -410,6 +425,7 @@
                   <button class="btn btn-error btn-outline" onclick={() => void api.sgtCommand('abort')}>Abort</button>
                 {/if}
               {:else}
+                <button class="btn btn-secondary" onclick={startCalibration}>Calibrate subject</button>
                 <button class="btn btn-primary" onclick={startCollection}>Start collection</button>
               {/if}
             </div>

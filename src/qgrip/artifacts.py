@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 from collections.abc import Iterator
@@ -24,7 +25,7 @@ from sifi_streamer.capture import (
     record_to_wire_map,
 )
 
-from qgrip.domain import ArtifactMetadata, QGripProfile, activation_target
+from qgrip.domain import ArtifactMetadata, QGripProfile
 from qgrip.errors import ArtifactError, ValidationError
 from qgrip.streaming import EMG_STREAM_ID
 
@@ -53,6 +54,102 @@ def new_capture_path(profile: QGripProfile, subject: str) -> Path:
     raw.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
     return raw / f"capture-{stamp}.capture.jsonl.zst"
+
+
+def calibration_path(profile: QGripProfile, subject: str) -> Path:
+    """Return the canonical subject calibration artifact path."""
+    path = subject_root(profile, subject) / "calibration.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def write_calibration_atomic(path: Path, document: dict[str, object]) -> Path:
+    """Atomically persist a validated calibration document."""
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(path)
+    return path
+
+
+def load_calibration(path: str | Path, profile: QGripProfile) -> dict[str, object]:
+    """Load and validate the canonical calibration identity and references."""
+    source = Path(path).resolve()
+    try:
+        document = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ArtifactError(f"invalid calibration {source}: {exc}") from exc
+    if document.get("version") != 1:
+        raise ArtifactError("unsupported calibration version")
+    if document.get("sample_rate_hz") != profile.device.sample_rate_hz:
+        raise ArtifactError("calibration sample rate does not match the profile")
+    if document.get("channels") != profile.device.channels:
+        raise ArtifactError("calibration channel count does not match the profile")
+    references = document.get("class_references")
+    if not isinstance(references, dict) or set(references) != set(profile.sgt.gestures) - {"rest"}:
+        raise ArtifactError("calibration does not cover the profile gestures")
+    return cast(dict[str, object], document)
+
+
+def derive_calibration(capture: str | Path, profile: QGripProfile, output: Path) -> Path:
+    """Derive robust rest and class maximum energy references from a calibration capture."""
+    source = Path(capture).resolve()
+    values: dict[str, list[float]] = {}
+    active: dict[str, object] | None = None
+    complete = False
+    for record in CaptureLogReader(source):
+        if isinstance(record, SegmentStarted) and record.segment_kind == "calibration":
+            label = record.attributes.get("label")
+            if isinstance(label, str):
+                active = {
+                    "gesture": label,
+                    "trial": 0,
+                    "activation": 0.0,
+                    "channels": profile.device.channels,
+                    "capture_file": str(source),
+                    "device": profile.device.kind,
+                    "sample_rate_hz": profile.device.sample_rate_hz,
+                    "rows": [],
+                }
+        elif isinstance(record, RawPacket) and active is not None:
+            cast(list[dict[str, object]], active["rows"]).extend(_emg_rows(record, active))
+        elif isinstance(record, SegmentStopped) and active is not None:
+            rows = cast(list[dict[str, object]], active["rows"])
+            window_samples = max(
+                1,
+                round(profile.device.sample_rate_hz * profile.sgt.activation_smoothing_seconds),
+            )
+            _assign_activation_energy(rows, profile.device.channels, window_samples)
+            values.setdefault(str(active["gesture"]), []).extend(
+                float(cast(float, row["activation_energy"])) for row in rows
+            )
+            active = None
+        elif isinstance(record, CaptureStopped):
+            complete = True
+    if not complete or not values.get("rest"):
+        raise ArtifactError("calibration capture did not complete with rest data")
+    rest = float(np.median(values["rest"]))
+    references: dict[str, float] = {}
+    for gesture in profile.sgt.gestures:
+        if gesture == "rest":
+            continue
+        samples = values.get(gesture, [])
+        if not samples:
+            raise ArtifactError(f"calibration has no samples for {gesture}")
+        reference = float(np.quantile(samples, profile.training.activation_reference_quantile))
+        if reference <= rest:
+            raise ArtifactError(f"calibration maximum for {gesture} does not exceed rest")
+        references[gesture] = reference
+    return write_calibration_atomic(
+        output,
+        {
+            "version": 1,
+            "capture": str(source),
+            "sample_rate_hz": profile.device.sample_rate_hz,
+            "channels": profile.device.channels,
+            "rest_floor": rest,
+            "class_references": references,
+        },
+    )
 
 
 def parquet_path(capture: Path) -> Path:
@@ -199,22 +296,14 @@ def _emg_rows(packet: RawPacket, presentation: dict[str, object]) -> list[dict[s
 def _assign_activation_labels(
     rows: list[dict[str, object]], gesture: str, proportional: bool
 ) -> None:
-    """Stamp each accepted sample with the activation prompt it was captured under.
-
-    Proportional captures sweep a triangle ramp across the hold, so the label is
-    reconstructed from each sample's position within the ordered presentation —
-    the same shape the operator followed on screen (see ``activation_target``).
-    Non-proportional captures carry a flat full contraction (``rest`` stays 0).
-    """
+    """Stamp each accepted sample with the held target from its presentation."""
     if not proportional:
         constant = 0.0 if gesture == "rest" else 1.0
         for row in rows:
             row["activation"] = constant
         return
-    count = len(rows)
-    for index, row in enumerate(rows):
-        fraction = index / (count - 1) if count > 1 else 0.0
-        row["activation"] = activation_target(gesture, fraction)
+    for row in rows:
+        row["activation"] = float(cast(float, row.get("activation", 0.0)))
 
 
 def _assign_activation_energy(
@@ -257,9 +346,26 @@ def export_capture(path: str | Path, *, activation_energy_window_seconds: float)
     if output.exists():
         raise ArtifactError(f"derived export already exists: {output}")
     presentations: dict[str, dict[str, object]] = {}
+    calibration_rest: float | None = None
+    calibration_refs: dict[str, object] = {}
     active_presentation: str | None = None
     complete = False
     for record in CaptureLogReader(metadata.path):
+        if isinstance(record, CaptureStarted):
+            raw_rest = record.attributes.get("calibration_rest_floor")
+            raw_refs = record.attributes.get("calibration_class_references")
+            if isinstance(raw_rest, (int, float)):
+                calibration_rest = float(raw_rest)
+            if isinstance(raw_refs, dict):
+                calibration_refs = raw_refs
+            elif isinstance(raw_refs, str):
+                try:
+                    parsed = json.loads(raw_refs)
+                except ValueError:
+                    parsed = None
+                if isinstance(parsed, dict):
+                    calibration_refs = parsed
+            continue
         if isinstance(record, SegmentStarted) and record.segment_kind == "presentation":
             attrs = record.attributes
             label, trial, activation = (
@@ -319,6 +425,18 @@ def export_capture(path: str | Path, *, activation_energy_window_seconds: float)
         rows = cast(list[dict[str, object]], presentation["rows"])
         _assign_activation_labels(rows, str(presentation["gesture"]), metadata.proportional)
         _assign_activation_energy(rows, metadata.channels, energy_window_samples)
+        if metadata.proportional and calibration_rest is not None:
+            reference = calibration_refs.get(str(presentation["gesture"]))
+            if isinstance(reference, (int, float)) and float(reference) > calibration_rest:
+                for row in rows:
+                    row["activation_measured"] = float(
+                        np.clip(
+                            (float(cast(float, row["activation_energy"])) - calibration_rest)
+                            / (float(reference) - calibration_rest),
+                            0,
+                            1,
+                        )
+                    )
         accepted.extend(rows)
     if not accepted:
         raise ArtifactError(f"capture has no accepted EMG rows: {metadata.path}")

@@ -52,39 +52,46 @@ def notification_for(status: JobStatus) -> dict[str, object] | None:
 
 class WireModel(BaseModel):
     """Base for strict HTTP request bodies that reject undeclared JSON fields."""
+
     model_config = ConfigDict(extra="forbid")
 
 
 class SubjectWire(WireModel):
     """Request body containing a subject identifier and target-mode toggle."""
+
     subject: str = Field(min_length=1, max_length=128)
     discrete: bool = False
 
 
 class SGTWire(SubjectWire):
     """SGT request with automatic or operator-gated presentation progression."""
+
     auto: bool = True
 
 
 class ExportWire(WireModel):
     """Request naming the authoritative capture to project into Parquet."""
+
     capture: str
 
 
 class TrainingWire(SubjectWire):
     """Request selecting optional datasets and a classifier architecture."""
+
     inputs: list[str] = []
     model: ModelName | None = None
 
 
 class CalibrationWire(WireModel):
     """Request forwarded to the independent Handi calibration-jog API."""
+
     joint: str
     delta: float
 
 
 class InferenceWire(WireModel):
     """Request selecting a checkpoint or adjacent ONNX model for live inference."""
+
     model: str
 
 
@@ -159,6 +166,11 @@ def create_app(
             owner.start_sgt(SGTRequest(body.subject, current, not body.discrete, body.auto))
         )
 
+    @app.post("/api/v1/sgt/calibration/start", dependencies=protected)
+    def start_calibration(body: SubjectWire) -> dict[str, object]:
+        """Start the subject-specific activation calibration workflow."""
+        return asdict(owner.start_calibration(body.subject, current))
+
     @app.post("/api/v1/sgt/command", dependencies=protected)
     def command_sgt(command: SGTCommand) -> dict[str, object]:
         """Forward one interactive command to the active SGT workflow."""
@@ -166,6 +178,7 @@ def create_app(
         return {"accepted": True, "command": command}
 
     @app.get("/api/v1/sgt/status", dependencies=protected)
+    @app.get("/api/v1/sgt/calibration/status", dependencies=protected)
     @app.get("/api/v1/export/status", dependencies=protected)
     @app.get("/api/v1/training/status", dependencies=protected)
     @app.get("/api/v1/inference/status", dependencies=protected)

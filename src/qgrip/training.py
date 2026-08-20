@@ -9,7 +9,7 @@ from collections.abc import Callable, Sized
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -20,7 +20,14 @@ from torch import nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, Dataset, Subset
 
-from qgrip.artifacts import export_capture, latest_capture, parquet_path, subject_root
+from qgrip.artifacts import (
+    calibration_path,
+    export_capture,
+    latest_capture,
+    load_calibration,
+    parquet_path,
+    subject_root,
+)
 from qgrip.domain import (
     ClassSampleCount,
     EpochMetric,
@@ -95,6 +102,48 @@ def _fit_activation_calibration(
         class_references=tuple(references.items()),
     )
     return calibration, activations
+
+
+def _apply_subject_calibration(
+    labels: tuple[str, ...],
+    targets: list[int],
+    energies: list[float],
+    document: dict[str, object],
+    *,
+    window_samples: int,
+    reference_quantile: float,
+) -> tuple[ActivationCalibration, list[float]]:
+    """Apply the subject's authoritative rest/max references to training windows."""
+    rest_floor = float(cast(float, document["rest_floor"]))
+    raw_references = cast(dict[str, object], document["class_references"])
+    references = {
+        label: float(cast(float, value))
+        for label, value in raw_references.items()
+    }
+    if any(label != "rest" and label not in references for label in labels):
+        raise ArtifactError("subject calibration does not cover the training labels")
+    activations = [
+        0.0
+        if labels[target] == "rest"
+        else float(
+            np.clip(
+                (energy - rest_floor) / (references[labels[target]] - rest_floor),
+                0,
+                1,
+            )
+        )
+        for target, energy in zip(targets, energies, strict=True)
+    ]
+    return (
+        ActivationCalibration(
+            method="subject_calibration",
+            window_samples=window_samples,
+            rest_floor=rest_floor,
+            reference_quantile=reference_quantile,
+            class_references=tuple(references.items()),
+        ),
+        activations,
+    )
 
 
 class ActivationConditionedCrossEntropy(nn.Module):
@@ -430,11 +479,14 @@ class TorchTrainingService:
         train_indices, validation_indices = self._split(dataset)
         activation_calibration: ActivationCalibration | None = None
         if request.proportional:
-            activation_calibration, dataset.activations = _fit_activation_calibration(
+            calibration_document = load_calibration(
+                calibration_path(request.profile, request.subject), request.profile
+            )
+            activation_calibration, dataset.activations = _apply_subject_calibration(
                 dataset.labels,
                 dataset.targets,
                 dataset.energies,
-                train_indices,
+                calibration_document,
                 window_samples=activation_window_size,
                 reference_quantile=self.options.activation_reference_quantile,
             )
