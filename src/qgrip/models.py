@@ -31,6 +31,7 @@ class EMGPreprocessor(nn.Module):
         normalization: NormalizationMode | str,
         n_channels: int,
     ) -> None:
+        """Configure preprocessing whose fitted state is exported with the model."""
         super().__init__()
         self.n_fft = n_fft
         self.hop_length = hop_length
@@ -91,10 +92,12 @@ class EMGPreprocessor(nn.Module):
         return magnitude.reshape(batch_size, channels, frequency_bins, magnitude.shape[-1])
 
     def forward(self, values: torch.Tensor) -> torch.Tensor:
+        """Transform raw ``(batch, samples, channels)`` EMG into frame tokens."""
         return self.spectrogram(values).permute(0, 3, 1, 2).flatten(start_dim=2)
 
 
 class BaseEMGClassifier(nn.Module):
+    """Common preprocessor, metadata contract, and shape helpers for classifiers."""
     def __init__(
         self,
         *,
@@ -106,6 +109,7 @@ class BaseEMGClassifier(nn.Module):
         normalization: NormalizationMode | str,
         predict_activation: bool,
     ) -> None:
+        """Store validated common model dimensions and activation-head mode."""
         super().__init__()
         self.window_size = window_size
         self.n_channels = n_channels
@@ -126,18 +130,22 @@ class BaseEMGClassifier(nn.Module):
 
     @property
     def model_config(self) -> dict[str, Any]:
+        """Return a copy of the canonical checkpoint configuration."""
         return dict(self._model_config)
 
     @property
     def token_dim(self) -> int:
+        """Return spectral features in each time-frame token."""
         return self.n_channels * (self.n_fft // 2 + 1)
 
     @property
     def n_frames(self) -> int:
+        """Return STFT frames produced by one complete model window."""
         return 1 + (self.window_size - self.n_fft) // self.hop_length
 
 
 class TransformerEMGClassifier(BaseEMGClassifier):
+    """Two-layer Transformer classifier over temporal EMG spectrogram tokens."""
     def __init__(
         self,
         *,
@@ -147,6 +155,7 @@ class TransformerEMGClassifier(BaseEMGClassifier):
         dropout: float = 0,
         **config: Any,
     ) -> None:
+        """Build attention projections and optional proportional activation head."""
         super().__init__(**config)
         self._model_config.update(
             d_model=d_model,
@@ -172,6 +181,7 @@ class TransformerEMGClassifier(BaseEMGClassifier):
         self.activation_head = nn.Linear(d_model, 1) if self.predict_activation else None
 
     def forward(self, values: torch.Tensor) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        """Return class logits and, when enabled, a sigmoid activation estimate."""
         tokens = self.input_proj(self.preprocessor(values)) + self.pos_embed
         features = self.transformer(tokens).mean(dim=1)
         logits = self.classifier(features)
@@ -181,7 +191,9 @@ class TransformerEMGClassifier(BaseEMGClassifier):
 
 
 class CNN1DEMGClassifier(BaseEMGClassifier):
+    """Temporal one-dimensional convolutional EMG classifier."""
     def __init__(self, *, hidden_channels: int = 64, dropout: float = 0, **config: Any) -> None:
+        """Build temporal convolution blocks and classifier heads."""
         super().__init__(**config)
         self._model_config.update(hidden_channels=hidden_channels, dropout=dropout)
         self.features = nn.Sequential(
@@ -201,6 +213,7 @@ class CNN1DEMGClassifier(BaseEMGClassifier):
         self.activation_head = nn.Linear(hidden_channels, 1) if self.predict_activation else None
 
     def forward(self, values: torch.Tensor) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        """Classify token sequences and optionally estimate proportional activation."""
         encoded = self.features(self.preprocessor(values).transpose(1, 2))
         features = self.classifier[:-1](encoded)
         logits = self.classifier[-1](features)
@@ -210,6 +223,7 @@ class CNN1DEMGClassifier(BaseEMGClassifier):
 
 
 class CNN2DEMGClassifier(BaseEMGClassifier):
+    """Two-dimensional convolutional classifier over channel spectrogram images."""
     def __init__(
         self,
         *,
@@ -217,6 +231,7 @@ class CNN2DEMGClassifier(BaseEMGClassifier):
         dropout: float = 0,
         **config: Any,
     ) -> None:
+        """Build spectrogram convolution blocks and classifier heads."""
         super().__init__(**config)
         self._model_config.update(hidden_channels=hidden_channels, dropout=dropout)
         self.features = nn.Sequential(
@@ -238,6 +253,7 @@ class CNN2DEMGClassifier(BaseEMGClassifier):
         )
 
     def forward(self, values: torch.Tensor) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        """Classify spectrogram images and optionally estimate activation."""
         encoded = self.features(self.preprocessor.spectrogram(values))
         features = self.classifier[:-1](encoded)
         logits = self.classifier[-1](features)
@@ -247,7 +263,9 @@ class CNN2DEMGClassifier(BaseEMGClassifier):
 
 
 class DenseEMGClassifier(BaseEMGClassifier):
+    """Fully connected baseline classifier over flattened temporal tokens."""
     def __init__(self, *, hidden_dim: int = 256, dropout: float = 0, **config: Any) -> None:
+        """Build the dense hidden layer and optional activation head."""
         super().__init__(**config)
         self._model_config.update(hidden_dim=hidden_dim, dropout=dropout)
         self.classifier = nn.Sequential(
@@ -260,6 +278,7 @@ class DenseEMGClassifier(BaseEMGClassifier):
         self.activation_head = nn.Linear(hidden_dim, 1) if self.predict_activation else None
 
     def forward(self, values: torch.Tensor) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        """Return logits and optional activation from a flattened token sequence."""
         encoded = self.preprocessor(values)
         features = self.classifier[:-1](encoded)
         logits = self.classifier[-1](features)
@@ -277,6 +296,7 @@ MODEL_CLASSES: dict[ModelName, type[BaseEMGClassifier]] = {
 
 
 def create_model(model_name: ModelName | str, **config: Any) -> BaseEMGClassifier:
+    """Construct the requested supported architecture from canonical configuration."""
     try:
         resolved_name = ModelName(model_name)
     except ValueError as exc:
@@ -285,6 +305,7 @@ def create_model(model_name: ModelName | str, **config: Any) -> BaseEMGClassifie
 
 
 def _validate_checkpoint_version(checkpoint: Mapping[str, Any]) -> None:
+    """Reject checkpoints whose explicit format version is not supported."""
     checkpoint_version = checkpoint.get("checkpoint_version")
     if checkpoint_version != CHECKPOINT_VERSION:
         raise ValueError(
@@ -294,12 +315,14 @@ def _validate_checkpoint_version(checkpoint: Mapping[str, Any]) -> None:
 
 
 def load_checkpoint(path: str | Path, device: torch.device | str = "cpu") -> dict[str, Any]:
+    """Load weights-only checkpoint data after validating its format version."""
     checkpoint = cast(dict[str, Any], torch.load(path, map_location=device, weights_only=True))
     _validate_checkpoint_version(checkpoint)
     return checkpoint
 
 
 def checkpoint_model_config(checkpoint: Mapping[str, Any]) -> tuple[ModelName, dict[str, Any]]:
+    """Extract the supported architecture name and independent config copy."""
     _validate_checkpoint_version(checkpoint)
     raw_model_name = checkpoint.get("model_name")
     try:
@@ -315,6 +338,7 @@ def checkpoint_model_config(checkpoint: Mapping[str, Any]) -> tuple[ModelName, d
 def load_model_checkpoint(
     path: str | Path, device: torch.device | str = "cpu"
 ) -> tuple[BaseEMGClassifier, dict[str, Any]]:
+    """Load a strict model state, move it to ``device``, and switch to evaluation."""
     checkpoint = load_checkpoint(path, device)
     model_name, config = checkpoint_model_config(checkpoint)
     model = create_model(model_name, **config)
@@ -325,6 +349,7 @@ def load_model_checkpoint(
 
 
 def export_model_to_onnx(model: BaseEMGClassifier, path: str | Path) -> None:
+    """Export the full raw-EMG preprocessing and classifier graph to ONNX."""
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
     device = next(model.parameters()).device
@@ -347,6 +372,7 @@ class ONNXEMGClassifier:
     """ONNX Runtime adapter with the same raw-window contract as Torch."""
 
     def __init__(self, path: str | Path, *, prefer_cuda: bool = False) -> None:
+        """Open one ONNX graph, preferring CUDA only when the provider is available."""
         try:
             import onnxruntime as ort
         except ImportError as exc:
@@ -363,6 +389,7 @@ class ONNXEMGClassifier:
         self.providers = tuple(self._session.get_providers())
 
     def predict(self, windows: np.ndarray) -> tuple[np.ndarray, np.ndarray | None]:
+        """Run raw windows and return logits plus an optional activation output."""
         inputs = np.ascontiguousarray(windows, dtype=np.float32)
         outputs = self._session.run(self._output_names, {self._input_name: inputs})
         logits = cast(np.ndarray, outputs[0])

@@ -26,17 +26,25 @@ HANDI_BRICK_REPOSITORY_URL = "https://github.com/YOUR-ORG/HANDI-BRICK-REPOSITORY
 
 
 class MotorRpc(Protocol):
-    def connect(self) -> None: ...
+    """Minimal Router transport contract needed by the safety controller."""
+    def connect(self) -> None:
+        """Open the Router transport."""
+        ...
 
-    def close(self) -> None: ...
+    def close(self) -> None:
+        """Close the Router transport and unblock its callers."""
+        ...
 
-    def call(self, method: str, *args: object) -> object: ...
+    def call(self, method: str, *args: object) -> object:
+        """Synchronously invoke one Router method with serializable arguments."""
+        ...
 
 
 class HandController:
     """Owns hand state, clamps all commands, and maps predictions to safe movements."""
 
     def __init__(self, config: HandiConfig, rpc: MotorRpc) -> None:
+        """Prepare safe initial state from verified limits; do not connect yet."""
         if not config.joints:
             raise ValidationError("Handi requires verified joint limits")
         self.config = config
@@ -51,19 +59,23 @@ class HandController:
 
     @property
     def state(self) -> ControllerState:
+        """Return the latest immutable state under the controller lock."""
         with self._lock:
             return self._state
 
     def connect(self) -> None:
+        """Open the validated Router transport before permitting movement."""
         self.rpc.connect()
         self._connected = True
 
     def apply_start_pose(self) -> None:
+        """Send every configured joint's verified startup position."""
         if not self._connected:
             raise RpcError("startup validation has not completed")
         self._send_positions({joint.name: joint.start for joint in self.config.joints})
 
     def _send_positions(self, requested: dict[str, float]) -> None:
+        """Clamp a full joint pose, transmit its ordered wire form, then publish it."""
         wire_positions = []
         clamped: dict[str, float] = {}
         current = dict(self.state.positions)
@@ -77,6 +89,7 @@ class HandController:
             self._state = replace(self._state, positions=tuple(clamped.items()))
 
     def move(self, name: str, requested: float) -> float:
+        """Set one named joint safely and return the position actually accepted."""
         joint = next((item for item in self.config.joints if item.name == name), None)
         if joint is None:
             raise ValidationError(f"unknown joint: {name}")
@@ -87,11 +100,13 @@ class HandController:
         return position
 
     def jog(self, name: str, delta: float) -> float:
+        """Move one joint by a calibration-safe delta no larger than ``step``."""
         if abs(delta) > self.config.step:
             raise ValidationError(f"calibration jog is limited to {self.config.step}")
         return self.move(name, dict(self.state.positions)[name] + delta)
 
     def apply_grip(self, name: str) -> None:
+        """Apply a named preset while retaining unspecified joints' current positions."""
         grip = next((item for item in self.config.grips if item.name == name), None)
         if grip is None:
             raise ValidationError(f"unknown grip: {name}")
@@ -102,6 +117,7 @@ class HandController:
             self._state = replace(self._state, grip=name)
 
     def apply_prediction(self, prediction: Prediction) -> None:
+        """Map an accepted model output to a clamped incremental or preset motion."""
         action = dict(self.config.gesture_mapping).get(prediction.gesture)
         with self._lock:
             self._state = replace(self._state, prediction=prediction)
@@ -116,10 +132,12 @@ class HandController:
             self.apply_grip(action)
 
     def fail(self, message: str) -> None:
+        """Publish an unhealthy stopped state after a runtime failure."""
         with self._lock:
             self._state = replace(self._state, running=False, healthy=False, error=message)
 
     def close(self) -> None:
+        """Prevent further controller movement and close the underlying transport."""
         with self._lock:
             self._state = replace(self._state, running=False)
         self.rpc.close()
@@ -136,6 +154,7 @@ class HandiRuntime:
         *,
         rpc_factory: Callable[[str, float], MotorRpc] = MessagePackRpcClient,
     ) -> None:
+        """Construct the independent runtime; validate configuration before ownership."""
         if profile.handi is None or not profile.handi.enabled:
             raise ValidationError("profile does not enable Handi")
         self.profile = profile
@@ -149,6 +168,7 @@ class HandiRuntime:
         self._close_lock = threading.Lock()
 
     def validate(self) -> None:
+        """Verify profile device identity against the loaded checkpoint metadata."""
         metadata = self.model.metadata
         if self.model.channels != self.profile.device.channels:
             raise ValidationError("model channel count does not match device")
@@ -158,6 +178,7 @@ class HandiRuntime:
             raise ValidationError("model sample rate does not match device")
 
     def start(self) -> None:
+        """Validate, connect Router, and send a safe start pose atomically."""
         self.validate()
         try:
             self.controller.connect()
@@ -169,6 +190,7 @@ class HandiRuntime:
             raise
 
     def run(self) -> None:
+        """Own live acquisition/inference/control until stopped or an error occurs."""
         try:
             with LiveEMGSession(self.profile.device, self.profile.acquisition) as session:
                 if session.channels != self.model.channels:
@@ -211,13 +233,16 @@ class HandiRuntime:
             self.close()
 
     def stop(self) -> None:
+        """Request cooperative exit from the live inference loop."""
         self._stop.set()
 
     def health(self) -> Health:
+        """Summarize controller readiness for the optional observer API."""
         state = self.controller.state
         return Health(state.healthy, state.running, True, state.healthy, state.error or "")
 
     def close(self) -> None:
+        """Perform exactly-once runtime cleanup without disabling servo torque."""
         with self._close_lock:
             if self._closed:
                 return

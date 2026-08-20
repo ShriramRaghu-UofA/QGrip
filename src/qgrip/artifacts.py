@@ -32,6 +32,7 @@ LOGGER = logging.getLogger("qgrip.artifacts")
 
 
 def validate_subject(subject: str) -> str:
+    """Normalize and validate a filesystem-safe subject identifier."""
     cleaned = subject.strip()
     if not cleaned or any(
         character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
@@ -42,10 +43,12 @@ def validate_subject(subject: str) -> str:
 
 
 def subject_root(profile: QGripProfile, subject: str) -> Path:
+    """Return the validated subject directory below the profile's data root."""
     return profile.data_root / validate_subject(subject)
 
 
 def new_capture_path(profile: QGripProfile, subject: str) -> Path:
+    """Create the raw directory and reserve a collision-resistant UTC capture path."""
     raw = subject_root(profile, subject) / "raw"
     raw.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
@@ -53,6 +56,7 @@ def new_capture_path(profile: QGripProfile, subject: str) -> Path:
 
 
 def parquet_path(capture: Path) -> Path:
+    """Return the canonical derived-Parquet sibling for a streamer capture path."""
     suffix = ".capture.jsonl.zst"
     if not capture.name.endswith(suffix):
         raise ArtifactError(f"not a streamer capture: {capture}")
@@ -60,6 +64,7 @@ def parquet_path(capture: Path) -> Path:
 
 
 def _number(attributes: object, name: str) -> float:
+    """Read one required numeric capture-header attribute with a domain error."""
     if not isinstance(attributes, dict) or not isinstance(attributes.get(name), (int, float)):
         raise ArtifactError(f"capture metadata has no numeric {name}")
     return float(attributes[name])
@@ -124,6 +129,7 @@ def read_capture(path: str | Path) -> tuple[ArtifactMetadata, Iterator[dict[str,
 
 
 def _emg_rows(packet: RawPacket, presentation: dict[str, object]) -> list[dict[str, object]]:
+    """Convert one well-formed EMG packet into projection rows or log/drop it."""
     document = packet.packet
     if document.get("packet_type") != EMG_STREAM_ID:
         return []
@@ -334,6 +340,7 @@ def export_capture(path: str | Path, *, activation_energy_window_seconds: float)
 
 
 def discover_artifacts(profile: QGripProfile, subject: str | None = None) -> tuple[Path, ...]:
+    """Find known QGrip artifacts newest-first, optionally below one subject."""
     scope = profile.data_root / subject if subject else profile.data_root
     if not scope.exists():
         return ()
@@ -346,6 +353,7 @@ def discover_artifacts(profile: QGripProfile, subject: str | None = None) -> tup
 
 
 def latest_capture(profile: QGripProfile, subject: str) -> Path:
+    """Return the newest discovered capture for ``subject`` or raise a domain error."""
     captures = [
         path
         for path in discover_artifacts(profile, subject)

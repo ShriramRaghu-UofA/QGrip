@@ -51,33 +51,40 @@ def notification_for(status: JobStatus) -> dict[str, object] | None:
 
 
 class WireModel(BaseModel):
+    """Base for strict HTTP request bodies that reject undeclared JSON fields."""
     model_config = ConfigDict(extra="forbid")
 
 
 class SubjectWire(WireModel):
+    """Request body containing a subject identifier and target-mode toggle."""
     subject: str = Field(min_length=1, max_length=128)
     discrete: bool = False
 
 
 class SGTWire(SubjectWire):
+    """SGT request with automatic or operator-gated presentation progression."""
     auto: bool = True
 
 
 class ExportWire(WireModel):
+    """Request naming the authoritative capture to project into Parquet."""
     capture: str
 
 
 class TrainingWire(SubjectWire):
+    """Request selecting optional datasets and a classifier architecture."""
     inputs: list[str] = []
     model: ModelName | None = None
 
 
 class CalibrationWire(WireModel):
+    """Request forwarded to the independent Handi calibration-jog API."""
     joint: str
     delta: float
 
 
 class InferenceWire(WireModel):
+    """Request selecting a checkpoint or adjacent ONNX model for live inference."""
     model: str
 
 
@@ -87,12 +94,14 @@ def create_app(
     token: str | None = None,
     coordinator: WorkflowCoordinator | None = None,
 ) -> FastAPI:
+    """Create the token-protected dashboard adapter over shared workflow services."""
     current = load_profile(profile) if isinstance(profile, (str, Path)) else profile
     launch_token = token or secrets.token_urlsafe(24)
     owner = coordinator or WorkflowCoordinator()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        """Publish application state and close the workflow owner at shutdown."""
         app.state.coordinator = owner
         app.state.profile = current
         app.state.token = launch_token
@@ -103,6 +112,7 @@ def create_app(
 
     @app.middleware("http")
     async def request_limits(request: Request, call_next):
+        """Reject HTTP request bodies larger than the documented one-MiB limit."""
         if int(request.headers.get("content-length", "0") or 0) > 1024 * 1024:
             return JSONResponse(
                 {"error": {"code": "request_too_large", "message": "request exceeds 1 MiB"}}, 413
@@ -111,9 +121,11 @@ def create_app(
 
     @app.exception_handler(QGripError)
     async def domain_error(_request: Request, exc: QGripError):
+        """Translate safe domain failures to the API's structured HTTP 409 wire form."""
         return JSONResponse({"error": {"code": type(exc).__name__, "message": str(exc)}}, 409)
 
     def authorize(x_qgrip_token: Annotated[str | None, Header()] = None) -> None:
+        """Require the ephemeral launch token using constant-time comparison."""
         if not x_qgrip_token or not secrets.compare_digest(x_qgrip_token, launch_token):
             raise HTTPException(401, "missing or invalid QGrip launch token")
 
@@ -121,6 +133,7 @@ def create_app(
 
     @app.get("/api/v1/bootstrap", dependencies=protected)
     def bootstrap() -> dict[str, object]:
+        """Return profile-derived UI configuration values."""
         return {
             "api_version": 1,
             "profile": str(current.path),
@@ -131,20 +144,24 @@ def create_app(
 
     @app.get("/api/v1/doctor", dependencies=protected)
     def doctor() -> dict[str, object]:
+        """Probe the configured acquisition device through its shared adapter."""
         return check_streamer_device(current.device, current.acquisition)
 
     @app.get("/api/v1/artifacts", dependencies=protected)
     def artifacts(subject: str | None = None) -> dict[str, object]:
+        """List known artifacts globally or within one subject directory."""
         return {"artifacts": [str(path) for path in discover_artifacts(current, subject)]}
 
     @app.post("/api/v1/sgt/start", dependencies=protected)
     def start_sgt(body: SGTWire) -> dict[str, object]:
+        """Start the process's exclusive screen-guided capture workflow."""
         return asdict(
             owner.start_sgt(SGTRequest(body.subject, current, not body.discrete, body.auto))
         )
 
     @app.post("/api/v1/sgt/command", dependencies=protected)
     def command_sgt(command: SGTCommand) -> dict[str, object]:
+        """Forward one interactive command to the active SGT workflow."""
         owner.send_sgt_command(command)
         return {"accepted": True, "command": command}
 
@@ -153,19 +170,23 @@ def create_app(
     @app.get("/api/v1/training/status", dependencies=protected)
     @app.get("/api/v1/inference/status", dependencies=protected)
     def status() -> dict[str, object]:
+        """Return the coordinator's authoritative latest job snapshot."""
         return asdict(owner.status) if owner.status else {"state": JobState.IDLE}
 
     def _status_payload(status: JobStatus | None) -> str:
+        """Encode a complete status snapshot for a Server-Sent Event frame."""
         snapshot = asdict(status) if status else {"state": JobState.IDLE}
         return json.dumps(snapshot, default=str)
 
     @app.get("/api/v1/stream", include_in_schema=False)
     async def stream(request: Request, token: str | None = None) -> StreamingResponse:
+        """Open one authenticated status and notification SSE stream."""
         # EventSource cannot send custom headers, so the launch token arrives as a query.
         if not token or not secrets.compare_digest(token, launch_token):
             raise HTTPException(401, "missing or invalid QGrip launch token")
 
         async def events() -> AsyncIterator[bytes]:
+            """Yield immediate and condition-triggered snapshots until disconnect."""
             # Push the current status immediately, then block until the
             # coordinator signals a change instead of polling on a timer. The
             # bounded wait lets us periodically notice client disconnects.
@@ -200,10 +221,12 @@ def create_app(
 
     @app.post("/api/v1/export/start", dependencies=protected)
     def start_export(body: ExportWire) -> dict[str, object]:
+        """Start exclusive capture-to-Parquet projection."""
         return asdict(owner.start_export(Path(body.capture).resolve(), current))
 
     @app.post("/api/v1/training/start", dependencies=protected)
     def start_training(body: TrainingWire) -> dict[str, object]:
+        """Start exclusive training from validated paths and profile configuration."""
         request = TrainingRequest(
             body.subject,
             current,
@@ -216,15 +239,18 @@ def create_app(
     @app.post("/api/v1/training/cancel", dependencies=protected)
     @app.post("/api/v1/inference/stop", dependencies=protected)
     def cancel() -> dict[str, bool]:
+        """Request cooperative cancellation of the currently owned workflow."""
         owner.cancel()
         return {"cancelled": True}
 
     @app.post("/api/v1/inference/start", dependencies=protected)
     def start_inference(body: InferenceWire) -> dict[str, object]:
+        """Start exclusive live inference for the selected artifact."""
         return asdict(owner.start_inference(Path(body.model).resolve(), current))
 
     @app.get("/api/v1/handi/status", dependencies=protected)
     async def handi_status() -> dict[str, object]:
+        """Proxy Handi state without assuming ownership of its process or hardware."""
         if not current.dashboard.handi_url:
             return {"configured": False}
         async with httpx.AsyncClient(timeout=current.dashboard.handi_timeout_seconds) as client:
@@ -234,6 +260,7 @@ def create_app(
 
     @app.post("/api/v1/handi/calibration", dependencies=protected)
     async def handi_calibration(body: CalibrationWire) -> dict[str, object]:
+        """Proxy a bounded calibration jog to independently running Handi."""
         if not current.dashboard.handi_url:
             return {"configured": False}
         async with httpx.AsyncClient(timeout=current.dashboard.handi_timeout_seconds) as client:
@@ -246,6 +273,7 @@ def create_app(
 
     @app.post("/api/v1/server/stop", dependencies=protected)
     def server_stop() -> dict[str, bool]:
+        """Close the coordinator and request dashboard-owned workflow shutdown."""
         owner.close()
         return {"stopping": True}
 
@@ -260,6 +288,7 @@ def create_app(
 
         @app.get("/{path:path}", include_in_schema=False)
         def spa(path: str) -> FileResponse:
+            """Serve approved dashboard assets or fall back to the SPA entry document."""
             candidate = (assets / path).resolve()
             if path and candidate.is_file() and assets.resolve() in candidate.parents:
                 return FileResponse(candidate)

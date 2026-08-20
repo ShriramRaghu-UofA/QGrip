@@ -1,4 +1,11 @@
-"""Strict versioned profile loading and atomic calibration writes."""
+"""Strict versioned profile parsing, defaults, and atomic persistence.
+
+Profiles are JSON documents at the application's configuration boundary.  They
+are deliberately closed schemas: unknown keys, unsupported versions, malformed
+values, and invalid cross-field combinations fail during loading.  Relative
+``data_root`` and ``assets_root`` paths are resolved beside the profile rather
+than against the caller's current directory.
+"""
 
 from __future__ import annotations
 
@@ -35,18 +42,21 @@ SCHEMA_VERSION = 1
 
 
 def _object(value: object, name: str) -> dict[str, object]:
+    """Require a JSON object and retain its boundary-local object type."""
     if not isinstance(value, dict):
         raise ValidationError(f"{name} must be an object")
     return cast(dict[str, object], value)
 
 
 def _only(data: dict[str, object], allowed: set[str], name: str) -> None:
+    """Reject keys outside the closed schema for a named JSON object."""
     unknown = set(data) - allowed
     if unknown:
         raise ValidationError(f"unknown {name} keys: {', '.join(sorted(unknown))}")
 
 
 def _finite(value: object, name: str, *, positive: bool = False) -> float:
+    """Parse a finite JSON number, optionally requiring it to be strictly positive."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValidationError(f"{name} must be a number")
     result = float(value)
@@ -56,32 +66,38 @@ def _finite(value: object, name: str, *, positive: bool = False) -> float:
 
 
 def _integer(value: object, name: str, *, minimum: int = 0) -> int:
+    """Parse a non-boolean JSON integer that meets an inclusive lower bound."""
     if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
         raise ValidationError(f"{name} must be an integer >= {minimum}")
     return value
 
 
 def _optional_integer(value: object, name: str, *, minimum: int) -> int | None:
+    """Parse an integer constraint or preserve JSON ``null`` as ``None``."""
     return None if value is None else _integer(value, name, minimum=minimum)
 
 
 def _optional_finite(value: object, name: str, *, positive: bool = False) -> float | None:
+    """Parse a finite-number constraint or preserve JSON ``null`` as ``None``."""
     return None if value is None else _finite(value, name, positive=positive)
 
 
 def _boolean(value: object, name: str) -> bool:
+    """Require a JSON boolean without accepting integer lookalikes."""
     if not isinstance(value, bool):
         raise ValidationError(f"{name} must be a boolean")
     return value
 
 
 def _string(value: object, name: str) -> str:
+    """Require and trim a non-empty string."""
     if not isinstance(value, str) or not value.strip():
         raise ValidationError(f"{name} must be a non-empty string")
     return value.strip()
 
 
 def _enum[EnumValue: StrEnum](value: object, enum: type[EnumValue], name: str) -> EnumValue:
+    """Parse a string into a supported string-enum member with a clear error."""
     text = _string(value, name)
     try:
         return enum(text)
@@ -90,15 +106,18 @@ def _enum[EnumValue: StrEnum](value: object, enum: type[EnumValue], name: str) -
 
 
 def _optional_string(value: object, name: str) -> str | None:
+    """Parse a non-empty string or preserve JSON ``null`` as ``None``."""
     return None if value is None else _string(value, name)
 
 
 def _resolve(base: Path, value: object, name: str) -> Path:
+    """Resolve a configured filesystem path relative to its profile directory."""
     path = Path(_string(value, name)).expanduser()
     return path.resolve() if path.is_absolute() else (base / path).resolve()
 
 
 def _parse_device(raw: object) -> DeviceConfig:
+    """Validate the ``device`` section and its transport-specific fields."""
     data = _object(raw, "device")
     _only(data, {"kind", "sample_rate_hz", "channels", "address", "port", "seed"}, "device")
     kind = _enum(data.get("kind", DeviceKind.SYNTHETIC), DeviceKind, "device.kind")
@@ -121,6 +140,7 @@ def _parse_device(raw: object) -> DeviceConfig:
 
 
 def _parse_acquisition(raw: object) -> AcquisitionConfig:
+    """Validate streamer buffering, capture-log durability, and health settings."""
     data = _object(raw, "acquisition")
     _only(
         data,
@@ -207,6 +227,7 @@ def _parse_acquisition(raw: object) -> AcquisitionConfig:
 
 
 def _parse_sgt(raw: object) -> SGTConfig:
+    """Validate SGT class order, timing, operator-practice, and target mode."""
     data = _object(raw, "sgt")
     _only(
         data,
@@ -261,6 +282,7 @@ def _parse_sgt(raw: object) -> SGTConfig:
 
 
 def _parse_model(raw: object) -> ModelConfig:
+    """Validate the selected classifier and only its supported architecture options."""
     data = _object(raw, "model")
     _only(data, {"name", "architecture"}, "model")
     name = _enum(data.get("name", ModelName.TRANSFORMER), ModelName, "model.name")
@@ -286,6 +308,7 @@ def _parse_model(raw: object) -> ModelConfig:
 
 
 def _parse_training(raw: object, device: DeviceConfig) -> TrainingConfig:
+    """Validate training windows, optimization, activation calibration, and export."""
     data = _object(raw, "training")
     _only(
         data,
@@ -392,6 +415,7 @@ def _parse_training(raw: object, device: DeviceConfig) -> TrainingConfig:
 
 
 def _parse_inference(raw: object) -> InferenceConfig:
+    """Validate backend policy and real-time confidence/debounce settings."""
     data = _object(raw, "inference")
     _only(
         data,
@@ -428,6 +452,7 @@ def _parse_inference(raw: object) -> InferenceConfig:
 
 
 def _parse_dashboard(raw: object) -> DashboardConfig:
+    """Validate dashboard bind settings and its optional Handi observer proxy."""
     data = _object(raw, "dashboard")
     _only(data, {"host", "port", "handi_url", "handi_timeout_seconds"}, "dashboard")
     port = _integer(data.get("port", 8765), "dashboard.port", minimum=1)
@@ -444,6 +469,7 @@ def _parse_dashboard(raw: object) -> DashboardConfig:
 
 
 def _parse_handi(raw: object | None) -> HandiConfig | None:
+    """Validate optional Handi control, including verified limits and pose mappings."""
     if raw is None:
         return None
     data = _object(raw, "handi")
@@ -511,6 +537,13 @@ def _parse_handi(raw: object | None) -> HandiConfig | None:
 
 
 def load_profile(path: str | Path) -> QGripProfile:
+    """Load one schema-version-1 JSON profile into a resolved immutable value.
+
+    ``path`` may be relative or use ``~``. All supported defaults are filled,
+    paths are made absolute relative to that file, and every section is checked
+    before the result is returned. Raises :class:`ValidationError` for unreadable
+    JSON, unknown keys, unsupported versions, or invalid values.
+    """
     resolved = Path(path).expanduser().resolve()
     try:
         raw = json.loads(resolved.read_text(encoding="utf-8"))
@@ -556,6 +589,13 @@ def load_profile(path: str | Path) -> QGripProfile:
 
 
 def profile_document(profile: QGripProfile) -> dict[str, object]:
+    """Serialize a resolved profile to its schema-v1 JSON-compatible form.
+
+    Data and asset roots are converted back to paths relative to ``profile.path``
+    when possible; immutable tuple representations become JSON arrays/objects.
+    The returned mapping contains no ``path`` key because it is loader context,
+    not part of the profile schema.
+    """
     document = asdict(profile)
     document.pop("path")
     document["data_root"] = os.path.relpath(profile.data_root, profile.path.parent)
@@ -571,6 +611,12 @@ def profile_document(profile: QGripProfile) -> dict[str, object]:
 
 
 def write_profile_atomic(profile: QGripProfile, output: str | Path) -> Path:
+    """Validate and atomically replace ``output`` with a serialized profile.
+
+    The function writes and fsyncs a sibling temporary file before replacement,
+    then reloads the result.  Existing data is therefore either the previous
+    profile or a fully valid new profile, never a partial JSON document.
+    """
     target = Path(output).expanduser().resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(profile_document(profile), indent=2) + "\n"
@@ -591,6 +637,12 @@ def write_profile_atomic(profile: QGripProfile, output: str | Path) -> Path:
 
 
 def default_profile(kind: DeviceKind | str = DeviceKind.SYNTHETIC) -> dict[str, object]:
+    """Return the complete editable schema-v1 document for a device kind.
+
+    Defaults target the synthetic source, use 200 Hz except for SiFi's 1600 Hz,
+    and select signed 8-bit normalization for Myo transports.  The mapping is
+    suitable for JSON serialization but has not been path-resolved or loaded.
+    """
     try:
         device_kind = DeviceKind(kind)
     except ValueError as exc:

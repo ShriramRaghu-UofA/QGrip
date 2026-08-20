@@ -24,10 +24,12 @@ from qgrip.workflows import InferenceService, SGTService, TrainingService
 
 
 def _profile_argument(parser: argparse.ArgumentParser) -> None:
+    """Add the required profile-file argument shared by profile-aware commands."""
     parser.add_argument("--profile", type=Path, required=True)
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the complete command-line grammar without running a workflow."""
     parser = argparse.ArgumentParser(
         prog="qgrip", description="EMG acquisition, training, inference, and Handi control"
     )
@@ -100,6 +102,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _run_handi(args: argparse.Namespace) -> int:
+    """Own the foreground standalone-Handi runtime and signal-driven shutdown."""
     profile = load_profile(args.profile)
     runtime = HandiRuntime(profile, str(args.model))
     config = profile.handi
@@ -136,6 +139,7 @@ def _run_handi(args: argparse.Namespace) -> int:
 
 
 def dispatch(args: argparse.Namespace) -> int:
+    """Adapt parsed CLI arguments to the shared typed services and print results."""
     if args.command == "profile":
         if args.profile_command == "create":
             args.path.parent.mkdir(parents=True, exist_ok=True)
@@ -252,6 +256,7 @@ def dispatch(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Run QGrip's console entry point and translate expected failures to exit codes."""
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )

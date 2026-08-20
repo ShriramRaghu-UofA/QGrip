@@ -12,6 +12,7 @@
   import MetricPlot from './MetricPlot.svelte';
   import StagePanel from './StagePanel.svelte';
 
+  /** Ordered dashboard workflow stages used for navigation and progress context. */
   const stages = ['Setup', 'Collect', 'Train', 'Validate', 'Handi'] as const;
   type Stage = (typeof stages)[number];
   type Theme = 'dracula' | 'nord' | 'light';
@@ -127,6 +128,7 @@
     stimulusFailed = false;
   });
 
+  /** Start a frontend-only smooth timer for the currently backend-timed SGT phase. */
   function startCountdown(seconds: number): void {
     stopCountdown();
     localElapsed = 0;
@@ -140,6 +142,7 @@
     }, 50);
   }
 
+  /** Stop and clear the local countdown interval, if one is active. */
   function stopCountdown(): void {
     if (countdownTimer !== undefined) {
       window.clearInterval(countdownTimer);
@@ -147,6 +150,7 @@
     }
   }
 
+  /** Display a best-effort terminal notification while the tab is visible. */
   function notify(note: Notification): void {
     // Ignorable by design: skip the toast entirely when the tab is not visible.
     if (typeof document !== 'undefined' && document.hidden) return;
@@ -157,6 +161,7 @@
     }, 5000);
   }
 
+  /** Map a backend notification severity to its daisyUI alert class. */
   function toastAlert(level: Notification['level']): string {
     if (level === 'success') return 'alert-success';
     if (level === 'error') return 'alert-error';
@@ -164,12 +169,14 @@
     return 'alert-info';
   }
 
+  /** Apply and persist the selected dashboard theme. */
   function chooseTheme(value: Theme): void {
     theme = value;
     document.documentElement.dataset.theme = value;
     localStorage.setItem('qgrip-theme', value);
   }
 
+  /** Load initial profile UI choices, then refresh the current subject's artifacts. */
   async function loadBootstrap(): Promise<void> {
     try {
       bootstrap = await api.request<Bootstrap>('/api/v1/bootstrap');
@@ -181,6 +188,7 @@
     }
   }
 
+  /** Refresh artifacts and select sensible first Parquet/checkpoint defaults. */
   async function loadArtifacts(): Promise<void> {
     const response = await api.request<ArtifactList>(
       `/api/v1/artifacts?subject=${encodeURIComponent(subject)}`
@@ -190,6 +198,7 @@
     modelPath ||= artifacts.find((path) => path.endsWith('.pt')) ?? '';
   }
 
+  /** Run the server-side device probe and surface either its result or error. */
   async function checkDevice(): Promise<void> {
     checkingDevice = true;
     doctor = null;
@@ -203,6 +212,7 @@
     }
   }
 
+  /** Replace local state with an authoritative status snapshot and derive UI updates. */
   function applyStatus(next: JobStatus): void {
     const wasRunning = status.state === 'running';
     status = next;
@@ -220,6 +230,7 @@
     }
   }
 
+  /** Start one backend workflow and activate polling only when SSE is unavailable. */
   async function start(path: string, body: object, nextStatusPath: string): Promise<void> {
     try {
       const initial = await api.request<JobStatus>(path, {
@@ -238,6 +249,7 @@
     }
   }
 
+  /** Fetch and apply the current workflow snapshot for the polling fallback. */
   async function poll(): Promise<void> {
     try {
       applyStatus(await api.request<JobStatus>(statusPath));
@@ -246,11 +258,13 @@
     }
   }
 
+  /** Reset live telemetry and start the selected automatic or manual SGT collection. */
   function startCollection(): void {
     predictionHistory = [];
     void start('/api/v1/sgt/start', { subject, discrete: false, auto: autoMode }, '/api/v1/sgt/status');
   }
 
+  /** Move between workflow panels with Alt+left and Alt+right keyboard shortcuts. */
   function handleKeys(event: KeyboardEvent): void {
     if (event.altKey && event.key === 'ArrowRight')
       stage = stages[Math.min(stages.length - 1, stageIndex + 1)];

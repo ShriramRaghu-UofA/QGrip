@@ -4,8 +4,10 @@
 
   import type { Prediction } from './api';
 
+  /** Most recent accepted predictions, plotted in arrival order. */
   let { history = [] }: { history?: Prediction[] } = $props();
 
+  /** Attach and clean up a compact uPlot confidence/activation visualization. */
   const renderPlot: Attachment<HTMLDivElement> = (container) => {
     const values = history.length ? history : [{ confidence: 0, activation: 0 }];
     const time = values.map((_, index) => index);

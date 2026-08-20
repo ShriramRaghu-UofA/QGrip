@@ -38,6 +38,7 @@ class PredictionDebouncer:
     """Accept a changed gesture only after consecutive inference outputs agree."""
 
     def __init__(self, required_predictions: int) -> None:
+        """Require a positive count before a changed gesture can be accepted."""
         if required_predictions <= 0:
             raise ValueError("required predictions must be positive")
         self._required_predictions = required_predictions
@@ -46,6 +47,7 @@ class PredictionDebouncer:
         self._candidate_count = 0
 
     def accept(self, prediction: Prediction) -> Prediction | None:
+        """Return stable predictions immediately and new gestures after agreement."""
         if prediction.gesture == self._accepted_gesture:
             self._candidate_gesture = None
             self._candidate_count = 0
@@ -72,29 +74,36 @@ class MyoPacket:
 
     @property
     def stream_id(self) -> str:
+        """Return the public stream name consumed by QGrip and sifi-streamer."""
         return EMG_STREAM_ID
 
     @property
     def timestamps(self) -> tuple[float, ...]:
+        """Expose this one-sample packet's acquisition timestamp as a stream tuple."""
         return (self.timestamp,)
 
     @property
     def data(self) -> dict[str, tuple[float, ...]]:
+        """Expose ordered Myo values under the public ``emg<index>`` channel names."""
         return {f"emg{index}": (value,) for index, value in enumerate(self.values)}
 
     @property
     def reported_rate_hz(self) -> float:
+        """Return the configured nominal source rate for health assessment."""
         return self.sample_rate_hz
 
     @property
     def samples_lost(self) -> int:
+        """Report zero because this transport packet does not expose loss counts."""
         return 0
 
     @property
     def status(self) -> str:
+        """Return the protocol's normal packet-status marker."""
         return "ok"
 
     def capture_document(self) -> dict[str, object]:
+        """Convert the protocol packet to the durable capture-log wire document."""
         return {
             "packet_type": EMG_STREAM_ID,
             "timestamps": list(self.timestamps),
@@ -109,11 +118,13 @@ class MyoAcquisitionDevice:
     """Inject the vendored Myo transport into sifi-streamer's device protocol."""
 
     def __init__(self, config: DeviceConfig) -> None:
+        """Retain immutable device configuration until the worker connects."""
         self._config = config
         self._device: Any | None = None
 
     @property
     def streams(self) -> tuple[SignalStreamSpec, ...]:
+        """Describe the fixed eight-channel EMG stream expected from Myo."""
         return (
             SignalStreamSpec(
                 EMG_STREAM_ID,
@@ -124,6 +135,7 @@ class MyoAcquisitionDevice:
 
     @property
     def device_info(self) -> dict[str, object]:
+        """Return serializable Myo identity for capture provenance."""
         return {
             "device": "myo",
             "transport": self._config.kind,
@@ -131,6 +143,7 @@ class MyoAcquisitionDevice:
         }
 
     def connect(self) -> None:
+        """Instantiate and connect the selected vendored Myo transport."""
         try:
             from qgrip.vendor.myo.device import MyoDevice
 
@@ -145,11 +158,13 @@ class MyoAcquisitionDevice:
             raise DeviceError(f"Myo connection failed: {exc}") from exc
 
     def disconnect(self) -> None:
+        """Release a connected Myo transport, if startup reached that stage."""
         if self._device is not None:
             self._device.disconnect()
             self._device = None
 
     def read_packet(self) -> MyoPacket:
+        """Read one transport sample and normalize it to streamer packet protocol."""
         if self._device is None:
             raise DeviceError("Myo device is not connected")
         while True:
@@ -180,6 +195,7 @@ def streamer_config(config: AcquisitionConfig) -> StreamerConfig:
 
 
 def health_thresholds(config: AcquisitionConfig) -> HealthThresholds:
+    """Translate QGrip health options to the public streamer threshold value."""
     health = config.health
     return HealthThresholds(
         window_seconds=health.window_seconds,
@@ -217,6 +233,7 @@ class LiveEMGSession:
     """One streamer-owned acquisition worker with a validated live EMG reader."""
 
     def __init__(self, config: DeviceConfig, acquisition: AcquisitionConfig | None = None) -> None:
+        """Prepare an unopened live session and its absolute consumer cursor."""
         acquisition = acquisition or AcquisitionConfig()
         self._handle = BackgroundHandle(
             streamer_config(acquisition), streamer_device_factory(config)
@@ -233,6 +250,7 @@ class LiveEMGSession:
         self._health: LiveSignalHealth | None = None
 
     def __enter__(self) -> LiveEMGSession:
+        """Start streamer acquisition and initialize a cursor at its current tail."""
         self._handle.__enter__()
         self._monitor = AcquisitionMonitor(self._handle, health_thresholds(self._acquisition))
         try:
@@ -251,15 +269,18 @@ class LiveEMGSession:
         return self
 
     def __exit__(self, *args: object) -> None:
+        """Stop the session-owned background acquisition worker on context exit."""
         self._handle.__exit__(*args)
 
     @property
     def sample_rate_hz(self) -> float:
+        """Return the nominal sample rate reported by the active streamer handle."""
         assert self._stream is not None
         return self._stream.nominal_rate_hz
 
     @property
     def channels(self) -> int:
+        """Return the validated EMG channel count from the active stream spec."""
         assert self._stream is not None
         return self._stream.n_channels
 
@@ -270,6 +291,7 @@ class LiveEMGSession:
         return self._health
 
     def _update_health(self) -> None:
+        """Merge streamer health with QGrip consumer-overrun accounting."""
         snapshot = self._monitor.latest() if self._monitor else None
         if snapshot is None:
             return

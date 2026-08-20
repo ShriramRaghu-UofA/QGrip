@@ -98,9 +98,11 @@ def _fit_activation_calibration(
 
 
 class ActivationConditionedCrossEntropy(nn.Module):
+    """Cross-entropy target construction that blends low-effort gestures toward rest."""
     """Interpolate only between rest and the prompted gesture near zero activation."""
 
     def __init__(self, rest_index: int, smoothing_threshold: float) -> None:
+        """Record the rest class and activation boundary for target interpolation."""
         super().__init__()
         self.rest_index = rest_index
         self.smoothing_threshold = smoothing_threshold
@@ -108,6 +110,7 @@ class ActivationConditionedCrossEntropy(nn.Module):
     def targets(
         self, labels: torch.Tensor, activations: torch.Tensor, n_classes: int
     ) -> torch.Tensor:
+        """Construct soft class targets from labels and proportional activation."""
         target = F.one_hot(labels, num_classes=n_classes).to(dtype=activations.dtype)
         active = labels != self.rest_index
         mix = torch.clamp(activations / self.smoothing_threshold, 0, 1)
@@ -121,6 +124,7 @@ class ActivationConditionedCrossEntropy(nn.Module):
         labels: torch.Tensor,
         activations: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        """Compute cross entropy against the activation-conditioned soft targets."""
         if activations is None:
             return F.cross_entropy(logits, labels)
         targets = self.targets(labels, activations, logits.shape[1])
@@ -129,6 +133,7 @@ class ActivationConditionedCrossEntropy(nn.Module):
     def accuracy_targets(
         self, labels: torch.Tensor, activations: torch.Tensor | None, n_classes: int
     ) -> torch.Tensor:
+        """Return hard labels used only for interpretable accuracy reporting."""
         if activations is None:
             return labels
         targets = self.targets(labels, activations, n_classes)
@@ -136,6 +141,7 @@ class ActivationConditionedCrossEntropy(nn.Module):
 
 
 class EMGWindowDataset(Dataset[tuple[torch.Tensor, ...]]):
+    """Validated, grouped EMG windows loaded from QGrip Parquet projections."""
     """Read canonical QGrip Parquet sessions into grouped EMG windows."""
 
     def __init__(
@@ -150,6 +156,7 @@ class EMGWindowDataset(Dataset[tuple[torch.Tensor, ...]]):
         include_activation: bool,
         activation_window_size: int,
     ) -> None:
+        """Read compatible sessions and construct windows with provenance groups."""
         self.labels = labels
         self.label_to_index = {label: index for index, label in enumerate(labels)}
         self.include_activation = include_activation
@@ -174,6 +181,7 @@ class EMGWindowDataset(Dataset[tuple[torch.Tensor, ...]]):
             raise ArtifactError(f"training data has no usable windows for classes: {missing}")
 
     def _read_session(self, path: Path, window_size: int, stride: int) -> None:
+        """Validate one Parquet session and append its complete in-presentation windows."""
         if self.include_activation:
             metadata = pq.read_schema(path).metadata or {}
             method = metadata.get(b"qgrip.activation_energy.method")
@@ -235,9 +243,11 @@ class EMGWindowDataset(Dataset[tuple[torch.Tensor, ...]]):
                 self.groups.append(group)
 
     def __len__(self) -> int:
+        """Return the number of constructed model windows."""
         return len(self.windows)
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor, ...]:
+        """Return one window, class target, activation, and provenance group."""
         values = torch.from_numpy(self.windows[index].copy())
         label = torch.tensor(self.targets[index], dtype=torch.long)
         if not self.include_activation:
@@ -255,6 +265,7 @@ def _train_epoch(
     activation_weight: float,
     device: torch.device,
 ) -> tuple[float, float]:
+    """Optimize one epoch and return mean loss plus hard-target accuracy."""
     model.train()
     total = 0.0
     correct = 0
@@ -291,6 +302,7 @@ def _evaluate(
     activation_weight: float,
     device: torch.device,
 ) -> tuple[float, float, dict[str, float]]:
+    """Evaluate one split without gradients and return loss, accuracy, and extras."""
     model.eval()
     total = 0.0
     correct = 0
@@ -357,7 +369,9 @@ def _summarize_split(
 
 
 class TorchTrainingService:
+    """Optional-Torch implementation of QGrip's deterministic training workflow."""
     def __init__(self, options: TrainingConfig) -> None:
+        """Retain immutable profile training options for one training invocation."""
         self.options = options
 
     def train(
@@ -367,6 +381,7 @@ class TorchTrainingService:
         metric: Callable[[EpochMetric], None] | None = None,
         summary: Callable[[TrainingSummary], None] | None = None,
     ) -> Path:
+        """Train, validate, checkpoint, and optionally export a model artifact."""
         inputs = request.inputs or (latest_capture(request.profile, request.subject),)
         resolved: list[Path] = []
         for source in inputs:
@@ -587,6 +602,7 @@ class TorchTrainingService:
         return checkpoint_path
 
     def _split(self, dataset: EMGWindowDataset) -> tuple[list[int], list[int]]:
+        """Create a seeded group split that keeps presentations wholly together."""
         indices = list(range(len(dataset)))
         groups = set(dataset.groups)
         if len(groups) >= 2:

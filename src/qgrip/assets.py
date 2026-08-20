@@ -18,6 +18,7 @@ LIBEMG_CITATION_URL = f"{LIBEMG_GESTURES_URL}/tree/{LIBEMG_GESTURES_COMMIT}"
 
 @dataclass(frozen=True, slots=True)
 class GestureAsset:
+    """Pinned upstream image path and SHA-256 digest for one gesture prompt."""
     source: str
     sha256: str
 
@@ -99,4 +100,5 @@ def download_assets(target: Path, gestures: Sequence[str] = DEFAULT_GESTURES) ->
 
 
 def _sha256(content: bytes) -> str:
+    """Return the lowercase SHA-256 hex digest used for asset integrity checks."""
     return hashlib.sha256(content).hexdigest()

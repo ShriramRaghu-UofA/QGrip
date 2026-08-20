@@ -2,9 +2,13 @@
   import type { Snippet } from 'svelte';
 
   interface Props {
+    /** Visible stage heading and the id source for the section label. */
     title: string;
+    /** Short explanation of the operation presented in this workflow stage. */
     description: string;
+    /** Whether the workflow is currently at this stage. */
     active: boolean;
+    /** Stage-specific controls rendered into the standard card shell. */
     children: Snippet;
   }
 

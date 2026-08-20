@@ -1,5 +1,7 @@
+/** Lifecycle states exposed by the backend's single-workflow coordinator. */
 export type JobState = 'idle' | 'running' | 'completed' | 'cancelled' | 'failed';
 
+/** Profile-derived values needed to initialize dashboard controls. */
 export interface Bootstrap {
   api_version: number;
   profile: string;
@@ -8,6 +10,7 @@ export interface Bootstrap {
   models: string[];
 }
 
+/** Authoritative, replace-not-patch snapshot broadcast on the status SSE channel. */
 export interface JobStatus {
   state: JobState;
   kind?: string;
@@ -28,8 +31,10 @@ export interface JobStatus {
   awaiting_command?: boolean;
 }
 
+/** Manual Screen Guided Training command accepted while capture awaits input. */
 export type SGTCommand = 'abort' | 'pause' | 'resume' | 'repeat';
 
+/** Device-probe result used to determine whether collection can start. */
 export interface DoctorReport {
   ready: boolean;
   kind: string;
@@ -37,6 +42,7 @@ export interface DoctorReport {
   channels: number;
 }
 
+/** One classified gesture with confidence, effort estimate, and model latency. */
 export interface Prediction {
   gesture: string;
   confidence: number;
@@ -44,6 +50,7 @@ export interface Prediction {
   latency_ms: number;
 }
 
+/** Metrics recorded after a complete training epoch. */
 export interface EpochMetric {
   epoch: number;
   loss: number;
@@ -52,12 +59,14 @@ export interface EpochMetric {
   training_accuracy: number;
 }
 
+/** Number of window samples from one label in each data-split partition. */
 export interface ClassSampleCount {
   label: string;
   training: number;
   validation: number;
 }
 
+/** Dataset window construction result sent before/while training proceeds. */
 export interface TrainingSummary {
   training_samples: number;
   validation_samples: number;
@@ -65,6 +74,7 @@ export interface TrainingSummary {
   classes: ClassSampleCount[];
 }
 
+/** Streamer and QGrip consumer continuity assessment for live inference. */
 export interface LiveSignalHealth {
   severity: string;
   warnings: string[];
@@ -75,6 +85,7 @@ export interface LiveSignalHealth {
   consumer_overruns: number;
 }
 
+/** Artifact-discovery response body. */
 export interface ArtifactList {
   artifacts: string[];
 }
@@ -99,8 +110,10 @@ export interface StreamHandlers {
 }
 
 export class QGripApi {
+  /** Wrap authenticated dashboard HTTP and Server-Sent Event operations. */
   constructor(private token: string) {}
 
+  /** Send an authenticated JSON API request and decode its successful response. */
   async request<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(path, {
       ...init,

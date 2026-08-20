@@ -53,10 +53,12 @@ class SGTCommandGate:
     """
 
     def __init__(self) -> None:
+        """Create an empty command queue and condition for one capture workflow."""
         self._condition = threading.Condition()
         self._pending: deque[SGTCommand] = deque()
 
     def send(self, command: SGTCommand) -> None:
+        """Queue a command and wake the capture thread waiting for operator input."""
         with self._condition:
             self._pending.append(command)
             self._condition.notify_all()
@@ -79,6 +81,7 @@ class SGTCommandGate:
 
 
 class SGTService:
+    """Record authoritative screen-guided-training captures through streamer APIs."""
     def run(
         self,
         request: SGTRequest,
@@ -86,6 +89,7 @@ class SGTService:
         progress: ProgressCallback | None = None,
         gate: SGTCommandGate | None = None,
     ) -> Path:
+        """Run one capture plan, emitting UI progress and honoring cooperative cancellation."""
         profile = request.profile
         output = new_capture_path(profile, request.subject)
         total = len(profile.sgt.gestures) * profile.sgt.trials
@@ -231,6 +235,7 @@ class SGTService:
                     *,
                     awaiting: bool = False,
                 ) -> None:
+                    """Publish a UI snapshot from backend-authoritative capture timing."""
                     if not progress:
                         return
                     progress(
@@ -293,6 +298,7 @@ class SGTService:
                             paused = True
 
                 def present_gesture(gesture: str, trial: int) -> None:
+                    """Record one presentation and repeat it only on operator request."""
                     nonlocal segment_sequence, recorded_presentation
                     duration = profile.sgt.duration_seconds
                     peak = prompt_at(gesture, duration / 2)
@@ -360,6 +366,7 @@ class SGTService:
 
 
 def _stage_instruction(stage: str, gesture: str) -> str:
+    """Turn an internal SGT stage and gesture id into concise operator guidance."""
     label = gesture.replace("_", " ")
     if stage == "preparation":
         return f"Get ready: {label}."
@@ -386,6 +393,7 @@ class TrainingService:
         metric: Callable[[EpochMetric], None] | None = None,
         summary: Callable[[TrainingSummary], None] | None = None,
     ) -> Path:
+        """Lazily import Torch training and delegate the typed request to it."""
         try:
             from qgrip.training import TorchTrainingService
         except ImportError as exc:
@@ -401,6 +409,7 @@ class InferenceService:
     """Stateful streaming inference using a self-describing Torch or ONNX model."""
 
     def __init__(self, model: str | Path, backend: str = "auto") -> None:
+        """Load strict checkpoint metadata and the requested Torch or ONNX backend."""
         self.path = Path(model).resolve()
         try:
             import torch
@@ -463,6 +472,7 @@ class InferenceService:
         self._samples: deque[tuple[float, ...]] = deque(maxlen=self.window_size)
 
     def predict(self, samples: tuple[tuple[float, ...], ...]) -> Prediction:
+        """Append raw samples, left-pad short direct calls, and classify one model window."""
         started = time.perf_counter()
         for sample in samples:
             if len(sample) != self.channels:
@@ -507,6 +517,7 @@ class WorkflowCoordinator:
     def __init__(
         self, sgt: SGTService | None = None, training: TrainingService | None = None
     ) -> None:
+        """Create the single-job coordinator with replaceable service facades."""
         self.sgt = sgt or SGTService()
         self.training = training or TrainingService()
         # A Condition (rather than a plain Lock) lets SSE clients block until the
@@ -520,6 +531,7 @@ class WorkflowCoordinator:
 
     @property
     def status(self) -> JobStatus | None:
+        """Return the latest immutable job snapshot under the coordinator condition."""
         with self._lock:
             return self._status
 
@@ -544,6 +556,7 @@ class WorkflowCoordinator:
             return self._status, self._version
 
     def _begin(self, kind: str, target: Callable[[], str]) -> JobStatus:
+        """Start one non-daemon worker after enforcing process-local exclusivity."""
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
                 raise BusyError("another hardware-owning operation is active")
@@ -553,6 +566,7 @@ class WorkflowCoordinator:
             self._cancel.clear()
 
             def runner() -> None:
+                """Run the requested operation and publish its terminal status."""
                 try:
                     result = target()
                     state = JobState.CANCELLED if self._cancel.is_set() else JobState.COMPLETED
@@ -570,10 +584,12 @@ class WorkflowCoordinator:
             return status
 
     def start_sgt(self, request: SGTRequest) -> JobStatus:
+        """Start SGT and adapt detailed capture progress into coordinator status."""
         gate = SGTCommandGate()
         self._sgt_gate = gate
 
         def update(value: SGTProgress) -> None:
+            """Apply latest capture progress as a complete dashboard snapshot."""
             with self._lock:
                 if self._status:
                     current = value.trial / max(1, value.total_trials)
@@ -603,6 +619,7 @@ class WorkflowCoordinator:
             gate.send(command)
 
     def start_export(self, path: Path, profile: QGripProfile) -> JobStatus:
+        """Start exclusive capture projection with profile energy-window settings."""
         return self._begin(
             "export",
             lambda: str(
@@ -616,9 +633,11 @@ class WorkflowCoordinator:
         )
 
     def start_training(self, request: TrainingRequest) -> JobStatus:
+        """Start exclusive training and retain metric/summary snapshots for clients."""
         metrics: list[EpochMetric] = []
 
         def update(value: EpochMetric) -> None:
+            """Append one epoch metric and publish training progress."""
             metrics.append(value)
             with self._lock:
                 if self._status:
@@ -631,6 +650,7 @@ class WorkflowCoordinator:
                     self._notify()
 
         def summarize(value: TrainingSummary) -> None:
+            """Publish the dataset summary without changing the job lifecycle."""
             with self._lock:
                 if self._status:
                     self._status = replace(self._status, training_summary=value)
@@ -642,9 +662,11 @@ class WorkflowCoordinator:
         )
 
     def start_inference(self, model: Path, profile: QGripProfile) -> JobStatus:
+        """Start exclusive live inference after stream/checkpoint identity validation."""
         inference = InferenceService(model, profile.inference.backend)
 
         def run() -> str:
+            """Own live stream consumption until cancellation and surface health snapshots."""
             with LiveEMGSession(profile.device, profile.acquisition) as session:
                 if session.channels != inference.channels:
                     raise ArtifactError("model channel count does not match live EMG stream")
@@ -694,9 +716,11 @@ class WorkflowCoordinator:
         return self._begin("inference", run)
 
     def cancel(self) -> None:
+        """Set the shared cooperative cancellation signal for the active workflow."""
         self._cancel.set()
 
     def close(self) -> None:
+        """Cancel, wake observers, and join the coordinator-owned worker thread."""
         self.cancel()
         with self._lock:
             # Wake any SSE waiters so they can observe the shutdown promptly.

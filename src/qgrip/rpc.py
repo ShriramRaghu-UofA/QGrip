@@ -17,6 +17,7 @@ NOTIFY = 2
 
 @dataclass(slots=True)
 class _Pending:
+    """One in-flight request's completion signal and eventual response payload."""
     event: threading.Event = field(default_factory=threading.Event)
     result: object = None
     error: object = None
@@ -28,6 +29,7 @@ class MessagePackRpcClient:
     def __init__(
         self, socket_path: str = "/var/run/arduino-router.sock", timeout: float = 5.0
     ) -> None:
+        """Initialize an unconnected client for one Router Unix-domain socket."""
         self.socket_path = socket_path
         self.timeout = timeout
         self._socket: socket.socket | None = None
@@ -39,6 +41,7 @@ class MessagePackRpcClient:
         self._receiver: threading.Thread | None = None
 
     def connect(self) -> None:
+        """Connect once and start the receiver that resolves concurrent calls."""
         if self._socket is not None:
             return
         try:
@@ -59,6 +62,7 @@ class MessagePackRpcClient:
         self._receiver.start()
 
     def close(self) -> None:
+        """Close transport and unblock all waiters with a disconnection error."""
         self._running.clear()
         connection, self._socket = self._socket, None
         if connection is not None:
@@ -73,6 +77,7 @@ class MessagePackRpcClient:
         self._receiver = None
 
     def __enter__(self) -> Self:
+        """Connect the client for use as a context manager."""
         self.connect()
         return self
 
@@ -82,9 +87,11 @@ class MessagePackRpcClient:
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
+        """Close the client when its context exits, regardless of the exception."""
         self.close()
 
     def call(self, method: str, *args: object) -> object:
+        """Send a request and wait up to the configured timeout for its response."""
         try:
             import msgpack
         except ImportError as exc:
@@ -114,6 +121,7 @@ class MessagePackRpcClient:
         return pending.result
 
     def notify(self, method: str, *args: object) -> None:
+        """Send a fire-and-forget MessagePack-RPC notification."""
         import msgpack
 
         connection = self._socket
@@ -123,6 +131,7 @@ class MessagePackRpcClient:
             connection.sendall(msgpack.packb([NOTIFY, method, list(args)], use_bin_type=True))
 
     def _receive_loop(self) -> None:
+        """Decode streamed frames and release pending requests until disconnect."""
         import msgpack
 
         unpacker = msgpack.Unpacker(raw=False)
@@ -145,6 +154,7 @@ class MessagePackRpcClient:
             self._running.clear()
 
     def _handle(self, message: Any) -> None:
+        """Route one valid response frame to the matching pending request."""
         if not isinstance(message, list) or len(message) < 4 or message[0] != RESPONSE:
             return
         sequence = message[1]
