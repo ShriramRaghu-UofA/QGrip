@@ -33,6 +33,23 @@ from qgrip.streaming import check_streamer_device
 from qgrip.workflows import WorkflowCoordinator
 
 
+def notification_for(status: JobStatus) -> dict[str, object] | None:
+    """Derive a discrete, ignorable toast from a terminal job transition.
+
+    The authoritative ``status`` channel always reflects the current state;
+    notifications are ephemeral courtesy events the dashboard may drop (for
+    example when the tab is hidden) without losing correctness.
+    """
+    kind = status.kind or "job"
+    if status.state == JobState.COMPLETED:
+        return {"kind": kind, "level": "success", "message": f"{kind} completed"}
+    if status.state == JobState.FAILED:
+        return {"kind": kind, "level": "error", "message": status.message or f"{kind} failed"}
+    if status.state == JobState.CANCELLED:
+        return {"kind": kind, "level": "warning", "message": f"{kind} cancelled"}
+    return None
+
+
 class WireModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -152,15 +169,28 @@ def create_app(
             # Push the current status immediately, then block until the
             # coordinator signals a change instead of polling on a timer. The
             # bounded wait lets us periodically notice client disconnects.
+            #
+            # Two named channels share this one authenticated connection:
+            #   * ``status`` — the authoritative snapshot the UI must always apply.
+            #   * ``notification`` — discrete, ignorable toasts on terminal
+            #     transitions; missing one is acceptable (see ARCHITECTURE).
             status, version = owner.status_snapshot()
             last = _status_payload(status)
-            yield f"data: {last}\n\n".encode()
+            last_state = status.state if status else JobState.IDLE
+            yield f"event: status\ndata: {last}\n\n".encode()
             while not await request.is_disconnected():
                 status, version = await asyncio.to_thread(owner.status_since, version, 1.0)
                 payload = _status_payload(status)
                 if payload != last:
                     last = payload
-                    yield f"data: {payload}\n\n".encode()
+                    yield f"event: status\ndata: {payload}\n\n".encode()
+                state = status.state if status else JobState.IDLE
+                if state != last_state:
+                    note = notification_for(status) if status else None
+                    if note is not None:
+                        frame = json.dumps(note, default=str)
+                        yield f"event: notification\ndata: {frame}\n\n".encode()
+                last_state = state
 
         return StreamingResponse(
             events(),

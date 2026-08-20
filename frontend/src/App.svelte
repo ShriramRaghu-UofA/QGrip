@@ -1,6 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { ArtifactList, Bootstrap, DoctorReport, JobStatus, Prediction } from './api';
+  import type {
+    ArtifactList,
+    Bootstrap,
+    DoctorReport,
+    JobStatus,
+    Notification,
+    Prediction,
+  } from './api';
   import { QGripApi } from './api';
   import MetricPlot from './MetricPlot.svelte';
   import StagePanel from './StagePanel.svelte';
@@ -22,6 +29,12 @@
   let predictionHistory = $state.raw<Prediction[]>([]);
   let error = $state('');
   let online = $state(true);
+
+  // Ephemeral, ignorable notifications surfaced as daisyUI toasts. Missing one
+  // (e.g. while the tab is hidden) is acceptable — authoritative state lives on
+  // the `status` channel, so we simply drop them when the tab is not visible.
+  let toasts = $state.raw<{ id: number; level: Notification['level']; message: string }[]>([]);
+  let toastSeq = 0;
 
   // Device readiness (Setup) — surfaced instead of a silent doctor call.
   let doctor = $state.raw<DoctorReport | null>(null);
@@ -69,15 +82,16 @@
     theme = (localStorage.getItem('qgrip-theme') as Theme | null) ?? 'dracula';
     document.documentElement.dataset.theme = theme;
     void loadBootstrap();
-    disposeStream = api.subscribe(
-      applyStatus,
-      () => (sseActive = false),
-      () => {
+    disposeStream = api.subscribe({
+      onStatus: applyStatus,
+      onNotification: notify,
+      onError: () => (sseActive = false),
+      onOpen: () => {
         // The stream (re)connected: stop any fallback polling and prefer push.
         sseActive = true;
         window.clearInterval(polling);
-      }
-    );
+      },
+    });
     sseActive = disposeStream !== null;
     return () => {
       disposeStream?.();
@@ -124,6 +138,23 @@
       window.clearInterval(countdownTimer);
       countdownTimer = undefined;
     }
+  }
+
+  function notify(note: Notification): void {
+    // Ignorable by design: skip the toast entirely when the tab is not visible.
+    if (typeof document !== 'undefined' && document.hidden) return;
+    const id = ++toastSeq;
+    toasts = [...toasts, { id, level: note.level, message: note.message }];
+    window.setTimeout(() => {
+      toasts = toasts.filter((toast) => toast.id !== id);
+    }, 5000);
+  }
+
+  function toastAlert(level: Notification['level']): string {
+    if (level === 'success') return 'alert-success';
+    if (level === 'error') return 'alert-error';
+    if (level === 'warning') return 'alert-warning';
+    return 'alert-info';
   }
 
   function chooseTheme(value: Theme): void {
@@ -225,6 +256,13 @@
 <svelte:head><title>{stage} · QGrip Dashboard</title></svelte:head>
 
 <div class="min-h-screen bg-base-100 text-base-content">
+  {#if toasts.length}
+    <div class="toast toast-end z-50" aria-live="polite">
+      {#each toasts as toast (toast.id)}
+        <div class={['alert', toastAlert(toast.level)]}><span>{toast.message}</span></div>
+      {/each}
+    </div>
+  {/if}
   <header class="navbar sticky top-0 z-20 border-b border-base-300 bg-base-100/95 px-4 backdrop-blur">
     <div class="flex-1 gap-3">
       <div class="grid size-10 place-items-center rounded-xl bg-primary font-black text-primary-content">Q</div>

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from qgrip.api import create_app
+from qgrip.api import create_app, notification_for
 from qgrip.cli import main
 from tests.helpers import write_profile
 
@@ -25,6 +25,28 @@ class AdapterTests(unittest.TestCase):
                 self.assertEqual(client.get("/api/v1/artifacts").status_code, 401)
                 response = client.get("/api/v1/artifacts", headers={"X-QGrip-Token": "secret"})
                 self.assertEqual(response.status_code, 200)
+
+    def test_stream_requires_a_token(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            app = create_app(write_profile(Path(directory)), token="secret")
+            with TestClient(app) as client:
+                self.assertEqual(client.get("/api/v1/stream").status_code, 401)
+                self.assertEqual(client.get("/api/v1/stream?token=wrong").status_code, 401)
+
+    def test_stream_frames_use_named_channels(self) -> None:
+        # Exercise the event generator directly: consuming it through the live
+        # ASGI stream would block on the intentionally endless push loop.
+        from qgrip.domain import JobState, JobStatus
+
+        completed = JobStatus("job", "training", JobState.COMPLETED)
+        failed = JobStatus("job", "training", JobState.FAILED, message="boom")
+        self.assertEqual(
+            notification_for(completed),
+            {"kind": "training", "level": "success", "message": "training completed"},
+        )
+        self.assertEqual(notification_for(failed)["level"], "error")
+        self.assertEqual(notification_for(failed)["message"], "boom")
+        self.assertIsNone(notification_for(JobStatus("job", "training", JobState.RUNNING)))
 
     def test_cli_help_entry_points(self) -> None:
         with self.assertRaises(SystemExit) as exit_context:

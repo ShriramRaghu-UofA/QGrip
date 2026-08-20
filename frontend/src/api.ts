@@ -63,6 +63,25 @@ export interface ArtifactList {
   artifacts: string[];
 }
 
+/**
+ * A discrete, ephemeral notification pushed on the `notification` SSE channel.
+ * It is best-effort: the dashboard may drop it (e.g. when the tab is hidden)
+ * without losing correctness, since authoritative state lives on `status`.
+ */
+export interface Notification {
+  kind: string;
+  level: 'success' | 'info' | 'warning' | 'error';
+  message: string;
+}
+
+/** Handlers for the named channels multiplexed over the SSE connection. */
+export interface StreamHandlers {
+  onStatus: (status: JobStatus) => void;
+  onNotification?: (notification: Notification) => void;
+  onError?: () => void;
+  onOpen?: () => void;
+}
+
 export class QGripApi {
   constructor(private token: string) {}
 
@@ -88,30 +107,37 @@ export class QGripApi {
   }
 
   /**
-   * Subscribe to server-pushed job status over SSE, returning a disposer.
+   * Subscribe to the server's named SSE channels, returning a disposer.
    * Falls back to `null` when the runtime lacks EventSource (e.g. jsdom tests),
    * letting callers poll instead.
+   *
+   * Two channels share one authenticated connection:
+   *   - `status`: the authoritative snapshot the UI must always apply.
+   *   - `notification`: discrete, ignorable toasts the caller may drop.
    *
    * `onOpen` fires whenever the connection is (re)established. Because
    * EventSource reconnects automatically after a drop, callers use it to clear
    * any fallback polling that `onError` may have started.
    */
-  subscribe(
-    onStatus: (status: JobStatus) => void,
-    onError?: () => void,
-    onOpen?: () => void
-  ): (() => void) | null {
+  subscribe(handlers: StreamHandlers): (() => void) | null {
     if (typeof EventSource === 'undefined') return null;
     const source = new EventSource(`/api/v1/stream?token=${encodeURIComponent(this.token)}`);
-    source.onopen = () => onOpen?.();
-    source.onmessage = (event) => {
+    source.onopen = () => handlers.onOpen?.();
+    source.addEventListener('status', (event) => {
       try {
-        onStatus(JSON.parse(event.data) as JobStatus);
+        handlers.onStatus(JSON.parse((event as MessageEvent).data) as JobStatus);
       } catch {
         /* ignore malformed frames */
       }
-    };
-    source.onerror = () => onError?.();
+    });
+    source.addEventListener('notification', (event) => {
+      try {
+        handlers.onNotification?.(JSON.parse((event as MessageEvent).data) as Notification);
+      } catch {
+        /* ignore malformed frames */
+      }
+    });
+    source.onerror = () => handlers.onError?.();
     return () => source.close();
   }
 }
