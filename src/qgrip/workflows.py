@@ -35,7 +35,7 @@ from qgrip.domain import (
     TrainingRequest,
     TrainingSummary,
 )
-from qgrip.errors import ArtifactError, BusyError
+from qgrip.errors import ArtifactError, BusyError, DeviceError
 from qgrip.streaming import (
     EMG_STREAM_ID,
     LiveEMGSession,
@@ -46,6 +46,15 @@ from qgrip.streaming import (
 )
 
 ProgressCallback = Callable[[SGTProgress], None]
+
+
+def _valid_emg_rows(samples: np.ndarray, validity: np.ndarray) -> np.ndarray:
+    """Keep complete EMG sample rows without flattening the channel dimension."""
+    sample_array = np.asarray(samples, dtype=np.float64)
+    validity_array = np.asarray(validity, dtype=bool)
+    if sample_array.ndim != 2 or validity_array.shape != sample_array.shape:
+        raise DeviceError("live EMG samples and validity must have matching 2D shapes")
+    return sample_array[np.all(validity_array, axis=1)]
 
 
 class SGTCommandGate:
@@ -219,8 +228,7 @@ class SGTService:
                     maxlen=max(
                         1,
                         round(
-                            profile.device.sample_rate_hz
-                            * profile.sgt.activation_smoothing_seconds
+                            profile.device.sample_rate_hz * profile.sgt.activation_smoothing_seconds
                         ),
                     )
                 )
@@ -243,7 +251,7 @@ class SGTService:
                     if window is None:
                         return last_measured_activation
                     stream_cursor = window.end_index
-                    valid = window.samples[np.asarray(window.validity, dtype=bool)]
+                    valid = _valid_emg_rows(window.samples, window.validity)
                     if valid.size == 0:
                         return last_measured_activation
                     measurement_history.extend(valid)
@@ -309,6 +317,7 @@ class SGTService:
                     segment_sequence += 1
                     stage_id = f"{kind}-{segment_sequence:03d}"
                     if progress:
+                        measured = measured_activation(gesture)
                         progress(
                             SGTProgress(
                                 JobState.RUNNING,
@@ -319,6 +328,10 @@ class SGTService:
                                 total_trials=total,
                                 duration_seconds=profile.sgt.duration_seconds,
                                 activation=target,
+                                measured_activation=measured,
+                                in_tolerance=(
+                                    abs(measured - target) <= profile.sgt.activation_tolerance
+                                ),
                                 capture=output,
                             )
                         )
@@ -337,6 +350,7 @@ class SGTService:
                             ):
                                 raise InterruptedError("capture cancelled")
                             if progress:
+                                measured = measured_activation(gesture)
                                 progress(
                                     SGTProgress(
                                         JobState.RUNNING,
@@ -348,6 +362,11 @@ class SGTService:
                                         elapsed_seconds=elapsed,
                                         duration_seconds=profile.sgt.duration_seconds,
                                         activation=target,
+                                        measured_activation=measured,
+                                        in_tolerance=(
+                                            abs(measured - target)
+                                            <= profile.sgt.activation_tolerance
+                                        ),
                                         capture=output,
                                     )
                                 )

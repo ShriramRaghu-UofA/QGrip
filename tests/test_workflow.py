@@ -6,6 +6,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
 import pyarrow.parquet as pq
 from sifi_streamer.capture import CaptureLogWriter
 
@@ -26,6 +27,7 @@ from qgrip.workflows import (
     SGTService,
     TrainingService,
     WorkflowCoordinator,
+    _valid_emg_rows,
 )
 from tests.helpers import write_profile
 
@@ -45,6 +47,15 @@ class SyntheticWorkflowTests(unittest.TestCase):
                     gesture: 10.0 for gesture in profile.sgt.gestures if gesture != "rest"
                 },
             },
+        )
+
+    def test_live_activation_keeps_complete_channel_rows(self) -> None:
+        samples = np.asarray([[1.0, 10.0], [2.0, 20.0], [3.0, 30.0]])
+        validity = np.asarray([[True, True], [True, False], [True, True]])
+
+        np.testing.assert_array_equal(
+            _valid_emg_rows(samples, validity),
+            np.asarray([[1.0, 10.0], [3.0, 30.0]]),
         )
 
     def test_export_uses_accepted_presentation_semantics(self) -> None:
@@ -228,6 +239,13 @@ class SyntheticWorkflowTests(unittest.TestCase):
             self.assertTrue(
                 any(
                     item.stage == "practice" and item.activation > 0
+                    for item in progress
+                    if item.gesture != "rest"
+                )
+            )
+            self.assertTrue(
+                any(
+                    item.stage == "practice" and item.measured_activation > 0
                     for item in progress
                     if item.gesture != "rest"
                 )
