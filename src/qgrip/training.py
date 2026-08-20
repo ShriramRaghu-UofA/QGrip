@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 from collections.abc import Callable, Sized
 from datetime import UTC, datetime
@@ -17,9 +18,17 @@ from torch import nn
 from torch.utils.data import DataLoader, Dataset, Subset
 
 from qgrip.artifacts import export_capture, latest_capture, parquet_path, subject_root
-from qgrip.domain import EpochMetric, TrainingConfig, TrainingRequest
+from qgrip.domain import (
+    ClassSampleCount,
+    EpochMetric,
+    TrainingConfig,
+    TrainingRequest,
+    TrainingSummary,
+)
 from qgrip.errors import ArtifactError
 from qgrip.models import BaseEMGClassifier, create_model, export_model_to_onnx
+
+LOGGER = logging.getLogger("qgrip.training")
 
 
 class EMGWindowDataset(Dataset[tuple[torch.Tensor, ...]]):
@@ -129,9 +138,10 @@ def _train_epoch(
     activation_loss: nn.Module | None,
     activation_weight: float,
     device: torch.device,
-) -> float:
+) -> tuple[float, float]:
     model.train()
     total = 0.0
+    correct = 0
     for batch in loader:
         values, labels = batch[:2]
         values, labels = values.to(device), labels.to(device)
@@ -146,9 +156,11 @@ def _train_epoch(
         loss.backward()
         optimizer.step()
         total += float(loss.item()) * values.shape[0]
+        correct += int((logits.argmax(dim=1) == labels).sum().item())
     if not isinstance(loader.dataset, Sized):
         raise TypeError("training dataset must have a finite size")
-    return total / len(loader.dataset)
+    count = len(loader.dataset)
+    return total / count, correct / count
 
 
 @torch.no_grad()
@@ -193,6 +205,32 @@ def _evaluate(
     return total / count, correct / count, extra
 
 
+def _summarize_split(
+    labels: tuple[str, ...],
+    targets: list[int],
+    train_indices: list[int],
+    validation_indices: list[int],
+    window_size: int,
+) -> TrainingSummary:
+    """Count per-class windows on each side of the train/validation split."""
+    training_counts = np.bincount(
+        [targets[index] for index in train_indices], minlength=len(labels)
+    )
+    validation_counts = np.bincount(
+        [targets[index] for index in validation_indices], minlength=len(labels)
+    )
+    classes = tuple(
+        ClassSampleCount(label, int(training_counts[index]), int(validation_counts[index]))
+        for index, label in enumerate(labels)
+    )
+    return TrainingSummary(
+        training_samples=len(train_indices),
+        validation_samples=len(validation_indices),
+        window_size=window_size,
+        classes=classes,
+    )
+
+
 class TorchTrainingService:
     PRESET_VERSION = 1
 
@@ -204,6 +242,7 @@ class TorchTrainingService:
         request: TrainingRequest,
         cancel: Any,
         metric: Callable[[EpochMetric], None] | None = None,
+        summary: Callable[[TrainingSummary], None] | None = None,
     ) -> Path:
         inputs = request.inputs or (latest_capture(request.profile, request.subject),)
         resolved: list[Path] = []
@@ -240,6 +279,25 @@ class TorchTrainingService:
         train_indices, validation_indices = self._split(dataset)
         train_dataset = Subset(dataset, train_indices)
         validation_dataset = Subset(dataset, validation_indices)
+        dataset_summary = _summarize_split(
+            dataset.labels, dataset.targets, train_indices, validation_indices, window_size
+        )
+        LOGGER.info(
+            "training on %d windows (%d train, %d validation) across %d classes",
+            dataset_summary.total_samples,
+            dataset_summary.training_samples,
+            dataset_summary.validation_samples,
+            len(dataset_summary.classes),
+        )
+        for entry in dataset_summary.classes:
+            LOGGER.info(
+                "  class %-16s %5d train / %5d validation",
+                entry.label,
+                entry.training,
+                entry.validation,
+            )
+        if summary:
+            summary(dataset_summary)
         generator = torch.Generator().manual_seed(self.options.seed)
         train_loader = DataLoader(
             train_dataset,
@@ -283,7 +341,7 @@ class TorchTrainingService:
         for epoch in range(1, self.options.epochs + 1):
             if cancel.is_set():
                 raise InterruptedError("training cancelled")
-            training_loss = _train_epoch(
+            training_loss, training_accuracy = _train_epoch(
                 model,
                 train_loader,
                 optimizer,
@@ -305,13 +363,31 @@ class TorchTrainingService:
                 {
                     "epoch": epoch,
                     "training_loss": training_loss,
+                    "training_accuracy": training_accuracy,
                     "validation_loss": validation_loss,
                     "accuracy": accuracy,
                     **extra,
                 }
             )
+            LOGGER.info(
+                "epoch %d/%d train_loss=%.4f train_acc=%.3f val_loss=%.4f val_acc=%.3f",
+                epoch,
+                self.options.epochs,
+                training_loss,
+                training_accuracy,
+                validation_loss,
+                accuracy,
+            )
             if metric:
-                metric(EpochMetric(epoch, validation_loss, accuracy))
+                metric(
+                    EpochMetric(
+                        epoch,
+                        validation_loss,
+                        accuracy,
+                        training_loss=training_loss,
+                        training_accuracy=training_accuracy,
+                    )
+                )
             if validation_loss < best_loss:
                 best_loss = validation_loss
                 best_accuracy = accuracy

@@ -77,6 +77,11 @@
   );
   const countdownRemaining = $derived(Math.max(0, duration - localElapsed));
 
+  // Training telemetry surfaced on the Train stage.
+  const latestMetric = $derived(status.metrics?.at(-1));
+  const trainingSummary = $derived(status.training_summary);
+  const percent = (value: number | undefined): string => `${Math.round((value ?? 0) * 100)}%`;
+
   const token = new URLSearchParams(location.search).get('token') ?? '';
   const api = new QGripApi(token);
 
@@ -400,8 +405,59 @@
         <StagePanel title="Train" description="Use the latest compatible session by default or explicitly combine sessions." active>
           <select class="select w-full" bind:value={model} aria-label="Model preset">{#each bootstrap?.models ?? [] as item (item)}<option value={item}>{item}</option>{/each}</select>
           <select class="select w-full" bind:value={trainingInput} aria-label="Training session"><option value="">Latest compatible session</option>{#each artifacts.filter((path) => path.endsWith('.parquet')) as path (path)}<option value={path}>{path}</option>{/each}</select>
-          <progress class="progress progress-secondary w-full" value={progress} max="100"></progress>
-          {#if status.metrics?.length}<div class="stats bg-base-300"><div class="stat"><div class="stat-title">Validation accuracy</div><div class="stat-value text-xl">{Math.round((status.metrics.at(-1)?.accuracy ?? 0) * 100)}%</div><div class="stat-desc">Loss {(status.metrics.at(-1)?.loss ?? 0).toFixed(4)}</div></div></div>{/if}
+          <div class="space-y-1">
+            <div class="flex justify-between text-sm"><span>{latestMetric ? `Epoch ${latestMetric.epoch}` : 'Training progress'}</span><span>{progress}%</span></div>
+            <progress class="progress progress-secondary w-full" value={progress} max="100"></progress>
+          </div>
+
+          {#if trainingSummary}
+            <div class="card border border-base-300 bg-base-100">
+              <div class="card-body gap-3">
+                <div class="flex items-center justify-between">
+                  <h3 class="font-semibold">Dataset</h3>
+                  <span class="text-xs opacity-60">{trainingSummary.window_size}-sample windows</span>
+                </div>
+                <div class="stats bg-base-300">
+                  <div class="stat"><div class="stat-title">Total windows</div><div class="stat-value text-xl">{trainingSummary.training_samples + trainingSummary.validation_samples}</div></div>
+                  <div class="stat"><div class="stat-title">Training</div><div class="stat-value text-xl">{trainingSummary.training_samples}</div></div>
+                  <div class="stat"><div class="stat-title">Validation</div><div class="stat-value text-xl">{trainingSummary.validation_samples}</div></div>
+                </div>
+                <div class="overflow-x-auto">
+                  <table class="table table-sm">
+                    <thead><tr><th>Class</th><th class="text-right">Train</th><th class="text-right">Validation</th><th class="text-right">Total</th></tr></thead>
+                    <tbody>
+                      {#each trainingSummary.classes as entry (entry.label)}
+                        <tr><td class="capitalize">{entry.label.replace(/_/g, ' ')}</td><td class="text-right">{entry.training}</td><td class="text-right">{entry.validation}</td><td class="text-right">{entry.training + entry.validation}</td></tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          {/if}
+
+          {#if latestMetric}
+            <div class="stats stats-vertical bg-base-300 sm:stats-horizontal">
+              <div class="stat"><div class="stat-title">Training accuracy</div><div class="stat-value text-xl">{percent(latestMetric.training_accuracy)}</div><div class="stat-desc">Loss {latestMetric.training_loss.toFixed(4)}</div></div>
+              <div class="stat"><div class="stat-title">Validation accuracy</div><div class="stat-value text-xl">{percent(latestMetric.accuracy)}</div><div class="stat-desc">Loss {latestMetric.loss.toFixed(4)}</div></div>
+            </div>
+          {/if}
+
+          {#if status.metrics?.length}
+            <details class="collapse collapse-arrow border border-base-300 bg-base-100">
+              <summary class="collapse-title font-semibold">Per-epoch history</summary>
+              <div class="collapse-content overflow-x-auto">
+                <table class="table table-sm table-pin-rows">
+                  <thead><tr><th>Epoch</th><th class="text-right">Train loss</th><th class="text-right">Train acc</th><th class="text-right">Val loss</th><th class="text-right">Val acc</th></tr></thead>
+                  <tbody>
+                    {#each status.metrics as row (row.epoch)}
+                      <tr><td>{row.epoch}</td><td class="text-right">{row.training_loss.toFixed(4)}</td><td class="text-right">{percent(row.training_accuracy)}</td><td class="text-right">{row.loss.toFixed(4)}</td><td class="text-right">{percent(row.accuracy)}</td></tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          {/if}
           {#if modelPath}<div class="alert alert-success"><span>Checkpoint ready: {modelPath}</span></div>{/if}
           <div class="card-actions justify-end"><button class="btn" onclick={() => void api.request('/api/v1/training/cancel', { method: 'POST' })}>Cancel</button><button class="btn btn-secondary" onclick={() => void start('/api/v1/training/start', { subject, model, inputs: trainingInput ? [trainingInput] : [], discrete: false }, '/api/v1/training/status')}>Train model</button></div>
         </StagePanel>

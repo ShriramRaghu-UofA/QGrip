@@ -29,6 +29,7 @@ from qgrip.domain import (
     SGTProgress,
     SGTRequest,
     TrainingRequest,
+    TrainingSummary,
     activation_target,
 )
 from qgrip.errors import ArtifactError, BusyError
@@ -385,6 +386,7 @@ class TrainingService:
         request: TrainingRequest,
         cancel: threading.Event,
         metric: Callable[[EpochMetric], None] | None = None,
+        summary: Callable[[TrainingSummary], None] | None = None,
     ) -> Path:
         try:
             from qgrip.training import TorchTrainingService
@@ -392,7 +394,9 @@ class TrainingService:
             raise ArtifactError(
                 "training requires the qgrip train extra: uv sync --extra train"
             ) from exc
-        return TorchTrainingService(request.profile.training).train(request, cancel, metric)
+        return TorchTrainingService(request.profile.training).train(
+            request, cancel, metric, summary
+        )
 
 
 class InferenceService:
@@ -603,8 +607,15 @@ class WorkflowCoordinator:
                     )
                     self._notify()
 
+        def summarize(value: TrainingSummary) -> None:
+            with self._lock:
+                if self._status:
+                    self._status = replace(self._status, training_summary=value)
+                    self._notify()
+
         return self._begin(
-            "training", lambda: str(self.training.train(request, self._cancel, update))
+            "training",
+            lambda: str(self.training.train(request, self._cancel, update, summarize)),
         )
 
     def start_inference(self, model: Path, profile: QGripProfile) -> JobStatus:

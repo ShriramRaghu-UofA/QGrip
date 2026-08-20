@@ -23,6 +23,7 @@ export interface JobStatus {
   result?: string;
   prediction?: Prediction;
   metrics?: EpochMetric[];
+  training_summary?: TrainingSummary;
   health?: LiveSignalHealth;
   awaiting_command?: boolean;
 }
@@ -47,6 +48,21 @@ export interface EpochMetric {
   epoch: number;
   loss: number;
   accuracy: number;
+  training_loss: number;
+  training_accuracy: number;
+}
+
+export interface ClassSampleCount {
+  label: string;
+  training: number;
+  validation: number;
+}
+
+export interface TrainingSummary {
+  training_samples: number;
+  validation_samples: number;
+  window_size: number;
+  classes: ClassSampleCount[];
 }
 
 export interface LiveSignalHealth {

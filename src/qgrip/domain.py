@@ -268,6 +268,35 @@ class EpochMetric:
     epoch: int
     loss: float
     accuracy: float
+    training_loss: float = 0.0
+    training_accuracy: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class ClassSampleCount:
+    """Per-class window counts for the training and validation splits."""
+
+    label: str
+    training: int
+    validation: int
+
+    @property
+    def total(self) -> int:
+        return self.training + self.validation
+
+
+@dataclass(frozen=True, slots=True)
+class TrainingSummary:
+    """Static dataset shape surfaced once training starts building windows."""
+
+    training_samples: int
+    validation_samples: int
+    window_size: int
+    classes: tuple[ClassSampleCount, ...] = ()
+
+    @property
+    def total_samples(self) -> int:
+        return self.training_samples + self.validation_samples
 
 
 @dataclass(frozen=True, slots=True)
@@ -326,6 +355,7 @@ class JobStatus:
     activation: float = 0.0
     result: str | None = None
     metrics: tuple[EpochMetric, ...] = field(default_factory=tuple)
+    training_summary: TrainingSummary | None = None
     prediction: Prediction | None = None
     health: LiveSignalHealth | None = None
     awaiting_command: bool = False
