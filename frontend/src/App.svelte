@@ -27,6 +27,14 @@
 
   const stageIndex = $derived(stages.indexOf(stage));
   const progress = $derived(Math.round((status.progress ?? 0) * 100));
+  const stimulusUrl = $derived(
+    status.stimulus_image ? `/stimuli/${encodeURIComponent(status.stimulus_image)}` : ''
+  );
+  const stimulusProgress = $derived(
+    status.duration_seconds
+      ? Math.min(100, Math.round((100 * (status.elapsed_seconds ?? 0)) / status.duration_seconds))
+      : 0
+  );
   const token = new URLSearchParams(location.search).get('token') ?? '';
   const api = new QGripApi(token);
 
@@ -138,7 +146,12 @@
         </StagePanel>
       {:else if stage === 'Collect'}
         <StagePanel title="Collect" description="Backend timing and markers drive calibration, practice, and gesture trials." active>
-          <div class="text-center"><div class="text-6xl font-black">{status.message || 'Ready'}</div><progress class="progress progress-primary mt-5 w-full" value={progress} max="100"></progress><p>{progress}% complete</p></div>
+          <div class="space-y-5 text-center">
+            <div><div class="badge badge-primary badge-outline mb-2">{status.stage ?? 'Ready'}</div><h2 class="text-2xl font-bold">{(status.instruction ?? status.message) || 'Ready to begin collection.'}</h2></div>
+            {#if stimulusUrl}<img class="mx-auto max-h-96 rounded-box object-contain" src={stimulusUrl} alt={`Gesture: ${status.gesture ?? ''}`} />{:else if status.gesture}<div class="rounded-box border border-base-300 p-12 text-6xl font-black">{status.gesture}</div>{/if}
+            <div class="space-y-2 text-left"><div class="flex justify-between text-sm"><span>Current stimulus</span><span>{stimulusProgress}%</span></div><progress class="progress progress-accent w-full" value={stimulusProgress} max="100"></progress><div class="flex justify-between text-sm text-base-content/70"><span>{(status.elapsed_seconds ?? 0).toFixed(1)} s elapsed</span><span>{(status.duration_seconds ?? 0).toFixed(1)} s</span></div></div>
+            <div class="space-y-2 text-left"><div class="flex justify-between text-sm"><span>Collection progress</span><span>{progress}%</span></div><progress class="progress progress-primary w-full" value={progress} max="100"></progress>{#if status.stage === 'presentation'}<p class="text-sm text-base-content/70">Activation target: {Math.round((status.activation ?? 0) * 100)}%</p>{/if}</div>
+          </div>
           {#if capturePath}<div class="alert alert-success"><span>Capture saved: {capturePath}</span></div>{/if}
           <div class="card-actions justify-end"><button class="btn btn-error btn-outline" onclick={() => void api.request('/api/v1/sgt/command?command=abort', { method: 'POST' })}>Abort</button>{#if capturePath}<button class="btn btn-secondary" onclick={() => void start('/api/v1/export/start', { capture: capturePath }, '/api/v1/export/status')}>Export Parquet</button>{/if}<button class="btn btn-primary" onclick={() => void start('/api/v1/sgt/start', { subject, discrete: false }, '/api/v1/sgt/status')}>Start collection</button></div>
         </StagePanel>

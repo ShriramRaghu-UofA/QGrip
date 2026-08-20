@@ -13,6 +13,13 @@ export interface JobStatus {
   kind?: string;
   progress?: number;
   message?: string;
+  gesture?: string;
+  stage?: string;
+  instruction?: string;
+  stimulus_image?: string;
+  elapsed_seconds?: number;
+  duration_seconds?: number;
+  activation?: number;
   result?: string;
   prediction?: Prediction;
   metrics?: EpochMetric[];

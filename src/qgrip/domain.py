@@ -209,9 +209,13 @@ class SGTRequest:
 class SGTProgress:
     state: JobState
     gesture: str | None = None
+    stage: str | None = None
+    instruction: str | None = None
+    stimulus_image: str | None = None
     trial: int = 0
     total_trials: int = 0
     elapsed_seconds: float = 0.0
+    duration_seconds: float = 0.0
     activation: float = 0.0
     capture: Path | None = None
     error: str | None = None
@@ -294,6 +298,13 @@ class JobStatus:
     state: JobState
     progress: float = 0.0
     message: str = ""
+    gesture: str | None = None
+    stage: str | None = None
+    instruction: str | None = None
+    stimulus_image: str | None = None
+    elapsed_seconds: float = 0.0
+    duration_seconds: float = 0.0
+    activation: float = 0.0
     result: str | None = None
     metrics: tuple[EpochMetric, ...] = field(default_factory=tuple)
     prediction: Prediction | None = None

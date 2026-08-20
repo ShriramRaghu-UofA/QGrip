@@ -185,6 +185,9 @@ def create_app(
         app.mount(
             "/assets", StaticFiles(directory=assets / "assets", check_dir=False), name="assets"
         )
+        app.mount(
+            "/stimuli", StaticFiles(directory=current.assets_root, check_dir=False), name="stimuli"
+        )
 
         @app.get("/{path:path}", include_in_schema=False)
         def spa(path: str) -> FileResponse:

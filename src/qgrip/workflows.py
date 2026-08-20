@@ -75,6 +75,19 @@ class SGTService:
                     nonlocal segment_sequence
                     segment_sequence += 1
                     stage_id = f"{kind}-{segment_sequence:03d}"
+                    if progress:
+                        progress(
+                            SGTProgress(
+                                JobState.RUNNING,
+                                gesture=gesture,
+                                stage=kind,
+                                instruction=_stage_instruction(kind, gesture),
+                                stimulus_image=_stimulus_image(profile, gesture),
+                                total_trials=total,
+                                duration_seconds=profile.sgt.duration_seconds,
+                                capture=output,
+                            )
+                        )
                     runtime.controller.start_segment(stage_id, kind, label=gesture)
                     runtime.controller.marker(stage_id, f"{kind}_started", label=gesture)
                     started = time.monotonic()
@@ -89,6 +102,20 @@ class SGTService:
                                 )
                             ):
                                 raise InterruptedError("capture cancelled")
+                            if progress:
+                                progress(
+                                    SGTProgress(
+                                        JobState.RUNNING,
+                                        gesture=gesture,
+                                        stage=kind,
+                                        instruction=_stage_instruction(kind, gesture),
+                                        stimulus_image=_stimulus_image(profile, gesture),
+                                        total_trials=total,
+                                        elapsed_seconds=elapsed,
+                                        duration_seconds=profile.sgt.duration_seconds,
+                                        capture=output,
+                                    )
+                                )
                     finally:
                         runtime.controller.stop_segment(
                             stage_id, "completed" if not cancel.is_set() else "aborted"
@@ -115,6 +142,21 @@ class SGTService:
                                 if gesture == "rest"
                                 else (trial / profile.sgt.trials if request.proportional else 1.0)
                             )
+                            if progress:
+                                progress(
+                                    SGTProgress(
+                                        JobState.RUNNING,
+                                        gesture=gesture,
+                                        stage="presentation",
+                                        instruction=_stage_instruction("presentation", gesture),
+                                        stimulus_image=_stimulus_image(profile, gesture),
+                                        trial=recorded_presentation,
+                                        total_trials=total,
+                                        duration_seconds=profile.sgt.duration_seconds,
+                                        activation=activation,
+                                        capture=output,
+                                    )
+                                )
                             presentation_id = runtime.controller.start_segment(
                                 f"presentation-{trial:03d}-{segment_sequence:03d}",
                                 "presentation",
@@ -143,12 +185,16 @@ class SGTService:
                                     progress(
                                         SGTProgress(
                                             JobState.RUNNING,
-                                            gesture,
-                                            recorded_presentation,
-                                            total,
-                                            elapsed,
-                                            activation,
-                                            output,
+                                            gesture=gesture,
+                                            stage="presentation",
+                                            instruction=_stage_instruction("presentation", gesture),
+                                            stimulus_image=_stimulus_image(profile, gesture),
+                                            trial=recorded_presentation,
+                                            total_trials=total,
+                                            elapsed_seconds=elapsed,
+                                            duration_seconds=profile.sgt.duration_seconds,
+                                            activation=activation,
+                                            capture=output,
                                         )
                                     )
                             runtime.controller.stop_segment(presentation_id, "completed")
@@ -165,6 +211,24 @@ class SGTService:
         if progress:
             progress(SGTProgress(JobState.COMPLETED, total_trials=total, capture=output))
         return output
+
+
+def _stage_instruction(stage: str, gesture: str) -> str:
+    label = gesture.replace("_", " ")
+    if stage == "calibration":
+        target = "relax" if gesture == "rest" else "hold a comfortable maximum"
+        return f"Calibration: {label} — {target}."
+    if stage == "practice":
+        return f"Practice: {label}."
+    return f"Perform: {label}."
+
+
+def _stimulus_image(profile: QGripProfile, gesture: str) -> str | None:
+    """Return a verified local stimulus filename without exposing filesystem paths."""
+    filename = f"{gesture}.png"
+    if Path(filename).name != filename:
+        return None
+    return filename if (profile.assets_root / filename).is_file() else None
 
 
 class TrainingService:
@@ -324,7 +388,16 @@ class WorkflowCoordinator:
                 if self._status:
                     current = value.trial / max(1, value.total_trials)
                     self._status = replace(
-                        self._status, progress=min(0.99, current), message=value.gesture or ""
+                        self._status,
+                        progress=min(0.99, current),
+                        message=value.instruction or value.gesture or "",
+                        gesture=value.gesture,
+                        stage=value.stage,
+                        instruction=value.instruction,
+                        stimulus_image=value.stimulus_image,
+                        elapsed_seconds=value.elapsed_seconds,
+                        duration_seconds=value.duration_seconds,
+                        activation=value.activation,
                     )
 
         return self._begin("sgt", lambda: str(self.sgt.run(request, self._cancel, update)))

@@ -8,9 +8,15 @@ import pyarrow.parquet as pq
 from sifi_streamer.capture import CaptureLogWriter
 
 from qgrip.artifacts import export_capture, read_capture
-from qgrip.domain import ModelName, SGTRequest, TrainingRequest
+from qgrip.domain import JobState, ModelName, SGTProgress, SGTRequest, TrainingRequest
 from qgrip.profiles import load_profile
-from qgrip.workflows import InferenceService, SGTService, TrainingService, WorkflowCoordinator
+from qgrip.workflows import (
+    InferenceService,
+    ProgressCallback,
+    SGTService,
+    TrainingService,
+    WorkflowCoordinator,
+)
 from tests.helpers import write_profile
 
 
@@ -102,3 +108,53 @@ class SyntheticWorkflowTests(unittest.TestCase):
                 tuple(tuple(0.0 for _ in range(8)) for _ in range(2))
             )
             self.assertEqual(prediction.activation, 1.0)
+
+    def test_sgt_reports_calibration_and_presentation_stimuli(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            profile = load_profile(write_profile(Path(directory)))
+            progress = []
+            SGTService().run(SGTRequest("s", profile, True), threading.Event(), progress.append)
+            self.assertEqual(progress[0].stage, "calibration")
+            self.assertEqual(progress[0].gesture, "rest")
+            self.assertIn("Calibration", progress[0].instruction or "")
+            self.assertEqual(progress[0].duration_seconds, profile.sgt.duration_seconds)
+            self.assertGreater(max(item.elapsed_seconds for item in progress), 0)
+            self.assertTrue(any(item.stage == "presentation" for item in progress))
+
+    def test_coordinator_exposes_sgt_stimulus(self) -> None:
+        class ReportingSGT(SGTService):
+            def run(
+                self,
+                request: SGTRequest,
+                cancel: threading.Event,
+                progress: ProgressCallback | None = None,
+            ) -> Path:
+                assert progress is not None
+                progress(
+                    SGTProgress(
+                        JobState.RUNNING,
+                        gesture="rest",
+                        stage="calibration",
+                        instruction="Calibration: rest — relax.",
+                        stimulus_image="rest.png",
+                    )
+                )
+                cancel.wait(0.2)
+                return Path("capture.capture.jsonl.zst")
+
+        with tempfile.TemporaryDirectory() as directory:
+            profile = load_profile(write_profile(Path(directory)))
+            coordinator = WorkflowCoordinator(sgt=ReportingSGT())
+            try:
+                coordinator.start_sgt(SGTRequest("s", profile, True))
+                deadline = time.monotonic() + 1
+                while time.monotonic() < deadline:
+                    status = coordinator.status
+                    if status and status.instruction:
+                        break
+                    time.sleep(0.01)
+                assert coordinator.status is not None
+                self.assertEqual(coordinator.status.gesture, "rest")
+                self.assertEqual(coordinator.status.stimulus_image, "rest.png")
+            finally:
+                coordinator.close()
