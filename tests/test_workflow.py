@@ -68,6 +68,43 @@ class SyntheticWorkflowTests(unittest.TestCase):
             self.assertEqual(table.num_rows, 1)
             self.assertEqual(table.column("gesture")[0].as_py(), "close")
 
+    def test_export_reconstructs_triangle_activation_labels(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            capture = Path(directory) / "session.capture.jsonl.zst"
+            attributes = {
+                "subject": "subject",
+                "device": "synthetic",
+                "sample_rate_hz": 200.0,
+                "channels": 8,
+                "classes": "rest,close",
+                "proportional": True,
+            }
+
+            def packet(stamp: float) -> dict[str, object]:
+                return {
+                    "packet_type": "emg_armband",
+                    "timestamps": [stamp],
+                    "data": {f"emg{index}": [float(index)] for index in range(8)},
+                }
+
+            with CaptureLogWriter(capture, "session", attributes) as writer:
+                writer.start_segment("trial-001", "trial", {"trial": 1})
+                writer.start_segment(
+                    "presentation-001",
+                    "presentation",
+                    {"label": "close", "trial": 1, "activation": 1.0},
+                )
+                for index in range(5):
+                    writer.append_packet(packet(float(index)))
+                writer.stop_segment("presentation-001", "completed")
+                writer.stop_segment("trial-001", "completed")
+            table = pq.read_table(export_capture(capture))
+            activations = table.column("activation").to_pylist()
+            # Five ordered samples sweep the triangle: 0 → 0.5 → 1 → 0.5 → 0.
+            self.assertEqual(
+                [round(value, 3) for value in activations], [0.0, 0.5, 1.0, 0.5, 0.0]
+            )
+
     def test_capture_export_train_and_infer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             profile = load_profile(write_profile(Path(directory)))

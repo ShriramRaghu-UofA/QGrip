@@ -29,6 +29,7 @@ from qgrip.domain import (
     SGTProgress,
     SGTRequest,
     TrainingRequest,
+    activation_target,
 )
 from qgrip.errors import ArtifactError, BusyError
 from qgrip.streaming import (
@@ -272,42 +273,58 @@ class SGTService:
                         if command == SGTCommand.PAUSE:
                             paused = True
 
-                def present_gesture(gesture: str, trial: int, activation: float) -> None:
+                def prompt_at(gesture: str, elapsed: float) -> float:
+                    """Activation the operator is asked to hold at ``elapsed`` seconds.
+
+                    Proportional capture sweeps a triangle ramp so a single hold
+                    covers the whole activation range; the identical shape is
+                    reconstructed per sample during export to label training.
+                    Non-proportional capture holds a flat full contraction.
+                    """
+                    if not request.proportional:
+                        return 0.0 if gesture == "rest" else 1.0
+                    duration = profile.sgt.duration_seconds
+                    fraction = elapsed / duration if duration > 0 else 0.0
+                    return activation_target(gesture, fraction)
+
+                def present_gesture(gesture: str, trial: int) -> None:
                     nonlocal segment_sequence, recorded_presentation
+                    duration = profile.sgt.duration_seconds
+                    peak = prompt_at(gesture, duration / 2)
                     while True:
                         if cancel.is_set():
                             raise InterruptedError("capture cancelled")
                         run_preparation(gesture)
                         segment_sequence += 1
                         trial_index = recorded_presentation + 1
-                        emit_presentation(gesture, trial_index, activation, 0.0)
+                        emit_presentation(gesture, trial_index, prompt_at(gesture, 0.0), 0.0)
                         presentation_id = runtime.controller.start_segment(
                             f"presentation-{trial:03d}-{segment_sequence:03d}",
                             "presentation",
                             label=gesture,
                             trial=trial,
-                            activation=activation,
+                            activation=peak,
                         )
                         runtime.controller.marker(
                             presentation_id,
                             "activation_target",
                             label=gesture,
-                            activation=activation,
+                            activation=peak,
                         )
                         started = time.monotonic()
-                        while (
-                            elapsed := time.monotonic() - started
-                        ) < profile.sgt.duration_seconds:
+                        while (elapsed := time.monotonic() - started) < duration:
                             if cancel.wait(
                                 min(
                                     profile.sgt.progress_interval_seconds,
-                                    profile.sgt.duration_seconds - elapsed,
+                                    duration - elapsed,
                                 )
                             ):
                                 raise InterruptedError("capture cancelled")
-                            emit_presentation(gesture, trial_index, activation, elapsed)
+                            emit_presentation(
+                                gesture, trial_index, prompt_at(gesture, elapsed), elapsed
+                            )
                         runtime.controller.stop_segment(presentation_id, "completed")
-                        if await_gate(gesture, trial_index, activation) == "repeat":
+                        if await_gate(gesture, trial_index, peak) == "repeat":
                             runtime.controller.marker(
                                 presentation_id, "presentation_superseded", label=gesture
                             )
@@ -321,12 +338,7 @@ class SGTService:
                     )
                     try:
                         for gesture in profile.sgt.gestures:
-                            activation = (
-                                0.0
-                                if gesture == "rest"
-                                else (trial / profile.sgt.trials if request.proportional else 1.0)
-                            )
-                            present_gesture(gesture, trial, activation)
+                            present_gesture(gesture, trial)
                     finally:
                         runtime.controller.stop_segment(
                             trial_id, "completed" if not cancel.is_set() else "aborted"

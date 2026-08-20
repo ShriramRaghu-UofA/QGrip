@@ -366,7 +366,12 @@
           <div class="space-y-1 text-left">
             <div class="flex justify-between text-sm"><span>Session progress</span><span>{progress}%</span></div>
             <progress class="progress progress-primary w-full" value={progress} max="100"></progress>
-            {#if status.stage === 'presentation' && !awaiting}<p class="text-sm text-base-content/70">Activation target: {Math.round((status.activation ?? 0) * 100)}%</p>{/if}
+            {#if status.stage === 'presentation' && !awaiting}
+              <div class="mt-2 space-y-1">
+                <div class="flex justify-between text-sm text-base-content/70"><span>Activation target</span><span>{Math.round((status.activation ?? 0) * 100)}%</span></div>
+                <progress class="progress progress-secondary w-full" value={Math.round((status.activation ?? 0) * 100)} max="100"></progress>
+              </div>
+            {/if}
           </div>
 
           {#if capturePath}<div class="alert alert-success"><span>Capture saved: {capturePath}</span></div>{/if}

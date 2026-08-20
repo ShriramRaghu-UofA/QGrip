@@ -22,7 +22,7 @@ from sifi_streamer.capture import (
     record_to_wire_map,
 )
 
-from qgrip.domain import ArtifactMetadata, QGripProfile
+from qgrip.domain import ArtifactMetadata, QGripProfile, activation_target
 from qgrip.errors import ArtifactError, ValidationError
 from qgrip.streaming import EMG_STREAM_ID
 
@@ -188,6 +188,27 @@ def _emg_rows(packet: RawPacket, presentation: dict[str, object]) -> list[dict[s
     return rows
 
 
+def _assign_activation_labels(
+    rows: list[dict[str, object]], gesture: str, proportional: bool
+) -> None:
+    """Stamp each accepted sample with the activation prompt it was captured under.
+
+    Proportional captures sweep a triangle ramp across the hold, so the label is
+    reconstructed from each sample's position within the ordered presentation —
+    the same shape the operator followed on screen (see ``activation_target``).
+    Non-proportional captures carry a flat full contraction (``rest`` stays 0).
+    """
+    if not proportional:
+        constant = 0.0 if gesture == "rest" else 1.0
+        for row in rows:
+            row["activation"] = constant
+        return
+    count = len(rows)
+    for index, row in enumerate(rows):
+        fraction = index / (count - 1) if count > 1 else 0.0
+        row["activation"] = activation_target(gesture, fraction)
+
+
 def export_capture(path: str | Path) -> Path:
     """Project accepted QGrip SGT presentations from a generic capture log.
 
@@ -256,12 +277,13 @@ def export_capture(path: str | Path) -> Path:
             complete = True
     if not complete:
         raise ArtifactError(f"capture did not close cleanly: {metadata.path}")
-    accepted = [
-        row
-        for presentation in presentations.values()
-        if presentation["stop_reason"] == "completed" and not presentation["superseded"]
-        for row in cast(list[dict[str, object]], presentation["rows"])
-    ]
+    accepted: list[dict[str, object]] = []
+    for presentation in presentations.values():
+        if presentation["stop_reason"] != "completed" or presentation["superseded"]:
+            continue
+        rows = cast(list[dict[str, object]], presentation["rows"])
+        _assign_activation_labels(rows, str(presentation["gesture"]), metadata.proportional)
+        accepted.extend(rows)
     if not accepted:
         raise ArtifactError(f"capture has no accepted EMG rows: {metadata.path}")
     temporary = output.with_suffix(".parquet.tmp")

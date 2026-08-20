@@ -7,6 +7,23 @@ from enum import StrEnum
 from pathlib import Path
 
 
+def activation_target(gesture: str, fraction: float) -> float:
+    """Triangle-ramp activation prompt over a normalized presentation fraction.
+
+    The proportional SGT "metronome" prompts the operator to ramp effort up and
+    then back down within a single hold: ``rest`` stays relaxed, while every
+    other gesture ramps linearly from ``0`` at the start up to a full
+    contraction at the midpoint and back to ``0`` at the end.  ``fraction`` is
+    the elapsed position in ``[0, 1]``.  The same helper drives the on-screen
+    prompt during capture and reconstructs the per-sample proxy label during
+    export, so the labels always match what the operator was asked to follow.
+    """
+    if gesture == "rest":
+        return 0.0
+    clamped = min(1.0, max(0.0, fraction))
+    return 1.0 - abs(2.0 * clamped - 1.0)
+
+
 class DeviceKind(StrEnum):
     SIFI = "sifi"
     MYO_BLE = "myo_ble"
