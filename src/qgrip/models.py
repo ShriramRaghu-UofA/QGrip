@@ -22,7 +22,18 @@ CHECKPOINT_VERSION = 1
 
 
 class EMGPreprocessor(nn.Module):
-    """Normalize raw EMG and produce per-channel magnitude spectrograms."""
+    """Normalize raw EMG and produce per-channel magnitude spectrograms.
+
+    The spectrogram is computed with a single ``Conv1d`` whose kernel bank is
+    a precomputed windowed-DFT basis (framing + Hann window + cosine/sine
+    projection fused into one convolution, stride = hop_length), rather than
+    via ``torch.stft``. ``torch.stft`` lowers to ONNX's native ``STFT`` op,
+    which onnxruntime's CPU execution provider runs an order of magnitude
+    slower than the equivalent Conv1d (~5ms vs ~0.2ms per window) — this was
+    the dominant cost in end-to-end inference latency. Conv1d also avoids
+    depending on an op with no ESP-DL quantizer backend, matching the
+    equivalent fix in the sifi-data-acquisition reference implementation.
+    """
 
     def __init__(
         self,
@@ -39,7 +50,22 @@ class EMGPreprocessor(nn.Module):
         self.n_channels = n_channels
         self.channel_mean: torch.Tensor = nn.Buffer(torch.zeros(n_channels))
         self.channel_scale: torch.Tensor = nn.Buffer(torch.ones(n_channels))
-        self._window: torch.Tensor = nn.Buffer(torch.hann_window(n_fft))
+        window = torch.hann_window(n_fft)
+        self._window: torch.Tensor = nn.Buffer(window)
+        frequency_bins = n_fft // 2 + 1
+        freq_idx = torch.arange(frequency_bins).unsqueeze(0)  # (1, F)
+        sample_idx = torch.arange(n_fft).unsqueeze(1)  # (n_fft, 1)
+        angle = 2 * torch.pi * sample_idx * freq_idx / n_fft  # (n_fft, F)
+        # Fold the analysis window into the DFT basis so framing needs no
+        # separate elementwise multiply: frame @ basis == (frame * window) @ dft.
+        cos_basis = torch.cos(angle) * window.unsqueeze(1)  # (n_fft, F)
+        sin_basis = -torch.sin(angle) * window.unsqueeze(1)  # (n_fft, F)
+        # Conv1d weight layout (out_channels, in_channels=1, kernel=n_fft);
+        # out_channels stacks cos bins then sin bins so one conv yields both.
+        kernel = torch.cat([cos_basis, sin_basis], dim=1).T.unsqueeze(1)
+        # persistent=False: derived purely from n_fft/hop_length, not learned;
+        # omitting it from state_dict keeps existing checkpoints loadable.
+        self._dft_kernel: torch.Tensor = nn.Buffer(kernel, persistent=False)
         self._normalization_epsilon = 1e-5
 
     @torch.no_grad()
@@ -77,18 +103,13 @@ class EMGPreprocessor(nn.Module):
             signals = signals / 128
         elif self.normalization != NormalizationMode.DATASET_STANDARDIZE:
             raise ValueError(f"unsupported EMG normalization {self.normalization!r}")
-        spectrum = torch.stft(
-            signals,
-            n_fft=self.n_fft,
-            hop_length=self.hop_length,
-            window=self._window,
-            center=False,
-            normalized=False,
-            onesided=True,
-            return_complex=True,
-        )
-        magnitude = spectrum.abs()
-        frequency_bins = self.n_fft // 2 + 1
+        real_imag = torch.nn.functional.conv1d(
+            signals.unsqueeze(1), self._dft_kernel, stride=self.hop_length
+        )  # (B*C, 2*F, T_frames)
+        frequency_bins = self._dft_kernel.shape[0] // 2
+        real = real_imag[:, :frequency_bins, :]
+        imag = real_imag[:, frequency_bins:, :]
+        magnitude = torch.sqrt(real * real + imag * imag)  # (B*C, F, T_frames)
         return magnitude.reshape(batch_size, channels, frequency_bins, magnitude.shape[-1])
 
     def forward(self, values: torch.Tensor) -> torch.Tensor:
