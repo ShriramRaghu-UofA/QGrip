@@ -239,15 +239,17 @@ class CNN2DEMGClassifier(BaseEMGClassifier):
         super().__init__(**config)
         self._model_config.update(hidden_channels=hidden_channels, dropout=dropout)
         self.features = nn.Sequential(
-            nn.Conv2d(self.n_channels, hidden_channels, 3, padding=1, stride=2),
+            nn.Conv2d(self.n_channels, hidden_channels, 3, padding=1, stride=4),
             nn.BatchNorm2d(hidden_channels),
             nn.ReLU(),
-            nn.Conv2d(hidden_channels, hidden_channels * 2, 3, padding=1),
+            nn.Conv2d(hidden_channels, hidden_channels * 2, 3, padding=1, stride=4),
             nn.BatchNorm2d(hidden_channels * 2),
             nn.ReLU(),
         )
+
+        
         self.classifier = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),
+            nn.AdaptiveMaxPool2d(1),
             nn.Flatten(),
             nn.Dropout(dropout),
             nn.Linear(hidden_channels * 2, config["n_classes"]),

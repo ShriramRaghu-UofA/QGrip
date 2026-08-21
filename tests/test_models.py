@@ -35,6 +35,20 @@ class ModelTests(unittest.TestCase):
                 self.assertTrue(torch.all((activation >= 0) & (activation <= 1)))
                 (logits.mean() + activation.mean()).backward()
 
+    def test_cnn2d_uses_adaptive_max_pooling(self) -> None:
+        model = create_model(
+            "cnn2d",
+            n_classes=3,
+            window_size=32,
+            n_channels=8,
+            n_fft=16,
+            hop_length=4,
+            normalization="dataset_standardize",
+            predict_activation=False,
+        )
+
+        self.assertIsInstance(model.classifier[0], torch.nn.AdaptiveMaxPool2d)
+
     def test_self_describing_checkpoint_round_trip(self) -> None:
         model = create_model(
             "dense",
