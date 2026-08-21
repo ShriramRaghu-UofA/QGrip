@@ -27,7 +27,10 @@ class HandControllerTests(unittest.TestCase):
         self.config = HandiConfig(
             enabled=True,
             step=10,
-            joints=(JointLimit("thumb", 10, 20, 15), JointLimit("index", 100, 200, 150)),
+            joints=(
+                JointLimit("thumb", 10, 20, 15, open_position=10),
+                JointLimit("index", 100, 200, 150, open_position=100),
+            ),
         )
         self.controller = HandController(self.config, self.rpc)
         self.controller.connect()
@@ -37,11 +40,13 @@ class HandControllerTests(unittest.TestCase):
         self.assertEqual(self.controller.move("thumb", 999), 20)
         self.assertEqual(self.rpc.calls[-1], ("set_positions", ([20, 150],)))
 
-    def test_activation_scales_open_close_step(self) -> None:
-        self.controller.apply_prediction(Prediction("close", 1, 0.5))
-        self.assertEqual(dict(self.controller.state.positions)["thumb"], 20)
-        self.controller.apply_prediction(Prediction("open", 1, 1))
-        self.assertEqual(dict(self.controller.state.positions)["thumb"], 10)
+    def test_open_close_is_noop_without_an_active_grip(self) -> None:
+        # No grip has been applied yet, so there's no preset target to blend
+        # toward - open/close has nothing to move, only openness to track.
+        self.rpc.calls.clear()
+        self.controller.apply_prediction(Prediction("close", 1, 1))
+        self.assertEqual(self.rpc.calls, [])
+        self.assertEqual(self.controller.state.openness, 1.0)
 
     def test_jog_is_bounded(self) -> None:
         with self.assertRaises(ValidationError):
@@ -55,7 +60,7 @@ class HandControllerLedFrameTests(unittest.TestCase):
         self.config = HandiConfig(
             enabled=True,
             step=10,
-            joints=(JointLimit("thumb", 10, 20, 15),),
+            joints=(JointLimit("thumb", 10, 20, 15, open_position=10),),
             grips=(GripPreset("fist", (("thumb", 20),), self.led_frame),),
         )
         self.controller = HandController(self.config, self.rpc)
@@ -72,7 +77,7 @@ class HandControllerLedFrameTests(unittest.TestCase):
         config = HandiConfig(
             enabled=True,
             step=10,
-            joints=(JointLimit("thumb", 10, 20, 15),),
+            joints=(JointLimit("thumb", 10, 20, 15, open_position=10),),
             grips=(GripPreset("open", (("thumb", 10),)),),
         )
         controller = HandController(config, self.rpc)
@@ -92,3 +97,55 @@ class HandControllerLedFrameTests(unittest.TestCase):
         controller.connect()
         controller.apply_start_pose()
         controller.apply_grip("fist")  # must not raise
+
+
+class HandControllerGripRelativeOpennessTests(unittest.TestCase):
+    """Open/close must blend toward the *active grip's own* preset shape,
+    not a generic full-hand close, so different grips stay visually distinct
+    at partial openness instead of collapsing through one shared pose."""
+
+    def setUp(self) -> None:
+        self.rpc = FakeRpc()
+        self.config = HandiConfig(
+            enabled=True,
+            step=10,
+            openness_step=0.5,
+            joints=(
+                JointLimit("thumb", 0, 100, 0, open_position=0),
+                JointLimit("index", 0, 100, 0, open_position=0),
+            ),
+            grips=(
+                GripPreset("pinch", (("thumb", 40), ("index", 80))),
+                GripPreset("fist", (("thumb", 100), ("index", 100))),
+            ),
+        )
+        self.controller = HandController(self.config, self.rpc)
+        self.controller.connect()
+        self.controller.apply_start_pose()
+
+    def test_apply_grip_blends_from_current_openness(self) -> None:
+        self.controller.apply_grip("pinch")  # openness defaults to 1.0 -> full preset
+        self.assertEqual(dict(self.controller.state.positions)["thumb"], 40)
+        self.assertEqual(dict(self.controller.state.positions)["index"], 80)
+
+    def test_close_blends_toward_active_grips_own_shape(self) -> None:
+        self.controller.apply_grip("pinch", openness=0.0)
+        self.controller.apply_prediction(Prediction("close", 1, 1))  # +0.5 openness
+        positions = dict(self.controller.state.positions)
+        self.assertEqual(positions["thumb"], 20)  # halfway 0 -> 40
+        self.assertEqual(positions["index"], 40)  # halfway 0 -> 80
+
+    def test_different_grips_stay_distinct_at_partial_openness(self) -> None:
+        self.controller.apply_grip("pinch", openness=0.5)
+        pinch_positions = dict(self.controller.state.positions)
+        self.controller.apply_grip("fist", openness=0.5)
+        fist_positions = dict(self.controller.state.positions)
+        self.assertNotEqual(pinch_positions["index"], fist_positions["index"])
+
+    def test_open_close_does_not_exceed_bounds(self) -> None:
+        self.controller.apply_grip("fist", openness=1.0)
+        self.controller.apply_prediction(Prediction("close", 1, 1))
+        self.assertEqual(self.controller.state.openness, 1.0)
+        for _ in range(4):
+            self.controller.apply_prediction(Prediction("open", 1, 1))
+        self.assertEqual(self.controller.state.openness, 0.0)

@@ -533,6 +533,7 @@ def _parse_handi(raw: object | None) -> HandiConfig | None:
             "api_host",
             "api_port",
             "step",
+            "openness_step",
             "joints",
             "grips",
             "gesture_mapping",
@@ -542,13 +543,20 @@ def _parse_handi(raw: object | None) -> HandiConfig | None:
     joints: list[JointLimit] = []
     for item in cast(list[object], data.get("joints", [])):
         joint = _object(item, "joint")
-        _only(joint, {"name", "minimum", "maximum", "start"}, "joint")
+        _only(joint, {"name", "minimum", "maximum", "start", "open_position"}, "joint")
         minimum = _finite(joint.get("minimum"), "joint.minimum")
         maximum = _finite(joint.get("maximum"), "joint.maximum")
         start = _finite(joint.get("start"), "joint.start")
+        open_position = _finite(joint.get("open_position"), "joint.open_position")
         if minimum >= maximum or not minimum <= start <= maximum:
             raise ValidationError("joint requires minimum < maximum and an in-range start")
-        joints.append(JointLimit(_string(joint.get("name"), "joint.name"), minimum, maximum, start))
+        if not minimum <= open_position <= maximum:
+            raise ValidationError("joint.open_position must be within minimum/maximum")
+        joints.append(
+            JointLimit(
+                _string(joint.get("name"), "joint.name"), minimum, maximum, start, open_position
+            )
+        )
     grips: list[GripPreset] = []
     for item in cast(list[object], data.get("grips", [])):
         grip = _object(item, "grip")
@@ -576,6 +584,9 @@ def _parse_handi(raw: object | None) -> HandiConfig | None:
         api_host=_string(data.get("api_host", "127.0.0.1"), "handi.api_host"),
         api_port=_integer(data.get("api_port", 8770), "handi.api_port", minimum=1),
         step=_finite(data.get("step", 5), "handi.step", positive=True),
+        openness_step=_finite(
+            data.get("openness_step", 0.1), "handi.openness_step", positive=True
+        ),
         joints=tuple(joints),
         grips=tuple(grips),
         gesture_mapping=tuple(

@@ -76,8 +76,14 @@ def write_profile(root: Path, *, handi: bool = False) -> Path:
             "api_enabled": False,
             "step": 5,
             "joints": [
-                {"name": "thumb", "minimum": 10, "maximum": 20, "start": 15},
-                {"name": "index", "minimum": 100, "maximum": 200, "start": 150},
+                {"name": "thumb", "minimum": 10, "maximum": 20, "start": 15, "open_position": 10},
+                {
+                    "name": "index",
+                    "minimum": 100,
+                    "maximum": 200,
+                    "start": 150,
+                    "open_position": 100,
+                },
             ],
             "grips": [
                 {

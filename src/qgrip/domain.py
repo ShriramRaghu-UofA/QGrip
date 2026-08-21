@@ -233,12 +233,20 @@ class DashboardConfig:
 
 @dataclass(frozen=True, slots=True)
 class JointLimit:
-    """Verified safe range and startup position for one Handi joint."""
+    """Verified safe range, startup position, and open-hand reference for one joint.
+
+    ``open_position`` is this joint's own "fully open" endpoint — the pose
+    open/close gestures blend away from, per ``HandController.apply_prediction``.
+    It need not equal ``minimum`` or ``start``: gearing and mechanical stops
+    differ per joint, so "open" isn't guaranteed to be the smaller of the two
+    limits.
+    """
 
     name: str
     minimum: float
     maximum: float
     start: float
+    open_position: float
 
     def clamp(self, value: float) -> float:
         """Return ``value`` limited to this joint's inclusive safe range."""
@@ -264,8 +272,11 @@ class HandiConfig:
     """Standalone Handi RPC, safety, and gesture-to-movement configuration.
 
     Enabled control requires at least one verified ``JointLimit``. Every motion
-    is clamped to those limits. ``step`` is the maximum full-activation delta
-    for mapped ``open`` and ``close`` actions; named mappings select a preset.
+    is clamped to those limits. ``step`` is the calibration jog's maximum raw-unit
+    delta per call (see ``HandController.jog``) — unrelated to gesture-driven
+    motion. ``openness_step`` is the maximum full-activation fraction (0..1) of
+    full open<->closed travel that one mapped ``open``/``close`` prediction may
+    advance the active grip's blend by; named mappings select a preset.
     """
 
     enabled: bool = False
@@ -275,6 +286,7 @@ class HandiConfig:
     api_host: str = "127.0.0.1"
     api_port: int = 8770
     step: float = 5.0
+    openness_step: float = 0.1
     joints: tuple[JointLimit, ...] = ()
     grips: tuple[GripPreset, ...] = ()
     gesture_mapping: tuple[tuple[str, str], ...] = (
@@ -435,6 +447,7 @@ class ControllerState:
     healthy: bool = True
     positions: tuple[tuple[str, float], ...] = ()
     grip: str | None = None
+    openness: float = 1.0
     prediction: Prediction | None = None
     error: str | None = None
 

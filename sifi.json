@@ -81,13 +81,14 @@
     "api_host": "127.0.0.1",
     "api_port": 8770,
     "step": 60,
+    "openness_step": 0.05,
     "joints": [
-      {"name": "thumb_rotate", "minimum": 2244, "maximum": 2840, "start": 2244},
-      {"name": "thumb_flex", "minimum": 2100, "maximum": 2944, "start": 2100},
-      {"name": "index", "minimum": 2180, "maximum": 3764, "start": 2180},
-      {"name": "middle", "minimum": 2173, "maximum": 3841, "start": 2173},
-      {"name": "ring", "minimum": 2103, "maximum": 3783, "start": 2103},
-      {"name": "baby", "minimum": 2091, "maximum": 3706, "start": 2091}
+      {"name": "thumb_rotate", "minimum": 2244, "maximum": 2840, "start": 2244, "open_position": 2244},
+      {"name": "thumb_flex", "minimum": 2100, "maximum": 2944, "start": 2100, "open_position": 2100},
+      {"name": "index", "minimum": 2180, "maximum": 3764, "start": 2180, "open_position": 2180},
+      {"name": "middle", "minimum": 2173, "maximum": 3841, "start": 2173, "open_position": 2173},
+      {"name": "ring", "minimum": 2103, "maximum": 3783, "start": 2103, "open_position": 2103},
+      {"name": "baby", "minimum": 2091, "maximum": 3706, "start": 2091, "open_position": 2091}
     ],
     "grips": [
       {

@@ -121,18 +121,29 @@ class HandController:
         names = [grip.name for grip in self.config.grips]
         current = self.state.grip
         index = names.index(current) if current in names else -1
-        self.apply_grip(names[(index + step) % len(names)])
+        self.apply_grip(names[(index + step) % len(names)], openness=self.state.openness)
 
-    def apply_grip(self, name: str) -> None:
-        """Apply a named preset while retaining unspecified joints' current positions."""
+    def apply_grip(self, name: str, *, openness: float = 1.0) -> None:
+        """Snap to a named preset blended by ``openness`` (0.0 open .. 1.0 closed).
+
+        Every joint the preset targets is blended between its own
+        ``JointLimit.open_position`` (0.0) and the preset's target (1.0) — the
+        same "current grip, at the current openness" pose ``apply_prediction``
+        uses for open/close, so cycling grips doesn't force the hand fully
+        closed. Joints the preset doesn't mention keep their current position.
+        """
         grip = next((item for item in self.config.grips if item.name == name), None)
         if grip is None:
             raise ValidationError(f"unknown grip: {name}")
+        openness = max(0.0, min(1.0, openness))
+        joints_by_name = {joint.name: joint for joint in self.config.joints}
         positions = dict(self.state.positions)
-        positions.update(grip.positions)
+        for joint_name, target in grip.positions:
+            joint = joints_by_name[joint_name]
+            positions[joint_name] = joint.open_position + openness * (target - joint.open_position)
         self._send_positions(positions)
         with self._lock:
-            self._state = replace(self._state, grip=name)
+            self._state = replace(self._state, grip=name, openness=openness)
         if grip.led_frame is not None:
             self._send_led_frame(grip.led_frame)
 
@@ -165,11 +176,30 @@ class HandController:
         if action in {"open", "close"}:
             self._last_grip_step_gesture = None
             direction = -1 if action == "open" else 1
-            delta = direction * self.config.step * max(0, min(1, prediction.activation))
-            current = dict(self.state.positions)
-            self.move_many(
-                {joint.name: current[joint.name] + delta for joint in self.config.joints}
+            activation = max(0.0, min(1.0, prediction.activation))
+            openness = max(
+                0.0,
+                min(1.0, self.state.openness + direction * self.config.openness_step * activation),
             )
+            grip = next(
+                (item for item in self.config.grips if item.name == self.state.grip), None
+            )
+            if grip is None:
+                # No grip is active yet - there's no preset target to blend toward, so
+                # open/close has nothing to do but track openness for the next apply_grip.
+                with self._lock:
+                    self._state = replace(self._state, openness=openness)
+                return
+            joints_by_name = {joint.name: joint for joint in self.config.joints}
+            positions = dict(self.state.positions)
+            for joint_name, target in grip.positions:
+                joint = joints_by_name[joint_name]
+                positions[joint_name] = joint.open_position + openness * (
+                    target - joint.open_position
+                )
+            self._send_positions(positions)
+            with self._lock:
+                self._state = replace(self._state, openness=openness)
         elif action in {"next", "prev"}:
             if prediction.gesture == self._last_grip_step_gesture:
                 return  # still the same contraction that already stepped - no-op
