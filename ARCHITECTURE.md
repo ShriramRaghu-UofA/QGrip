@@ -74,9 +74,9 @@ The sections have distinct owners:
 - `model` selects one architecture and only its allowed architecture parameters.
 - `training` controls windowing, STFT, activation estimation, optimization, and export.
 - `inference` controls backend policy, cadence, confidence gating, and debounce.
-- `dashboard` controls the local server and optional remote Handi proxy.
-- `handi`, when present, defines the Router socket, API, verified joints, grip presets,
-  step size, and gesture-to-action mapping.
+- `dashboard` controls the local server bind address and port.
+- `handi`, when present, defines the Router socket, verified joints, grip presets, step
+  size, and gesture-to-action mapping.
 
 Proportional/discrete mode is carried on each SGT and training request. The dashboard uses
 `sgt.proportional` as its collection mode and requires a valid subject calibration before
@@ -100,7 +100,7 @@ The component that starts work owns shutdown:
 - a CLI workflow owns its foreground service and context managers;
 - `WorkflowCoordinator` owns one non-daemon cooperative worker thread and its cancel event;
 - `LiveEMGSession` owns one `BackgroundHandle` acquisition worker for its context lifetime;
-- standalone Handi owns acquisition, inference, RPC, its optional API thread, and cleanup;
+- standalone Handi owns acquisition, inference, RPC, and cleanup;
 - FastAPI lifespan closes its coordinator; Uvicorn always runs with one worker.
 
 The coordinator permits only one active job in its process. Capture and inference own
@@ -242,8 +242,8 @@ because custom headers are unavailable there. Tokens use constant-time compariso
 bodies larger than 1 MiB are rejected.
 
 The dashboard API exposes device probing, artifact discovery, SGT control, export, training,
-inference, and optional Handi proxy operations under `/api/v1`. The coordinator's latest
-`JobStatus` is the authoritative state. One authenticated SSE connection emits:
+and inference operations under `/api/v1`. The coordinator's latest `JobStatus` is the
+authoritative state. One authenticated SSE connection emits:
 
 - `status`, a complete snapshot consumers must apply; and
 - `notification`, an ignorable convenience event for terminal transitions.
@@ -252,10 +252,8 @@ SSE waits on the coordinator condition rather than busy-polling. The bounded wai
 notice disconnected clients. Domain errors use a structured HTTP 409 response; authentication
 failures use 401, and request-model validation remains FastAPI's 422 response.
 
-The dashboard can proxy status and calibration jog calls to an independently running Handi
-API through `dashboard.handi_url`. This does not merge lifecycle ownership: the Handi process
-continues to own its hardware and RPC connection. The Handi API itself has no authentication;
-its default loopback bind must not be broadened without an external trusted boundary.
+The dashboard has no proxy into a running standalone Handi process; the two are independent.
+The Handi process owns its hardware and RPC connection exclusively while it runs.
 
 ## Standalone Handi
 

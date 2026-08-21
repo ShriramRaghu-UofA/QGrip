@@ -342,10 +342,9 @@ acknowledgement timeout, capture flush/compression/durability behavior, and nest
 signal-health thresholds. `model.architecture` accepts only parameters for the selected
 model (for example, Transformer `d_model`, `nhead`, `dim_feedforward`, and `dropout`).
 `inference` owns output cadence, confidence/debounce policy, and its short cooperative
-waits. `dashboard.handi_timeout_seconds` controls only the optional Handi health and
-calibration HTTP proxy. The shipped templates provide normal operating values; fields
-they omit receive the versioned schema defaults. Use
-`qgrip profile show <profile.json>` to inspect the fully resolved document.
+waits. The shipped templates provide normal operating values; fields they omit receive
+the versioned schema defaults. Use `qgrip profile show <profile.json>` to inspect the
+fully resolved document.
 
 ## Artifact contracts
 

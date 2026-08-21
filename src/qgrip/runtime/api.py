@@ -11,7 +11,6 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated
 
-import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -80,13 +79,6 @@ class TrainingWire(SubjectWire):
 
     inputs: list[str] = []
     model: ModelName | None = None
-
-
-class CalibrationWire(WireModel):
-    """Request forwarded to the independent Handi calibration-jog API."""
-
-    joint: str
-    delta: float
 
 
 class InferenceWire(WireModel):
@@ -274,29 +266,6 @@ def create_app(
     def start_inference(body: InferenceWire) -> dict[str, object]:
         """Start exclusive live inference for the selected artifact."""
         return asdict(owner.start_inference(Path(body.model).resolve(), current))
-
-    @app.get("/api/v1/handi/status", dependencies=protected)
-    async def handi_status() -> dict[str, object]:
-        """Proxy Handi state without assuming ownership of its process or hardware."""
-        if not current.dashboard.handi_url:
-            return {"configured": False}
-        async with httpx.AsyncClient(timeout=current.dashboard.handi_timeout_seconds) as client:
-            response = await client.get(f"{current.dashboard.handi_url.rstrip('/')}/api/v1/status")
-            response.raise_for_status()
-            return {"configured": True, "remote": response.json()}
-
-    @app.post("/api/v1/handi/calibration", dependencies=protected)
-    async def handi_calibration(body: CalibrationWire) -> dict[str, object]:
-        """Proxy a bounded calibration jog to independently running Handi."""
-        if not current.dashboard.handi_url:
-            return {"configured": False}
-        async with httpx.AsyncClient(timeout=current.dashboard.handi_timeout_seconds) as client:
-            response = await client.post(
-                f"{current.dashboard.handi_url.rstrip('/')}/api/v1/calibration/jog",
-                json=body.model_dump(),
-            )
-            response.raise_for_status()
-            return response.json()
 
     @app.post("/api/v1/server/stop", dependencies=protected)
     def server_stop() -> dict[str, bool]:

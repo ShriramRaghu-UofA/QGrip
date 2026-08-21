@@ -70,16 +70,12 @@
   },
   "dashboard": {
     "host": "127.0.0.1",
-    "port": 8765,
-    "handi_timeout_seconds": 2.0
+    "port": 8765
   },
   "handi": {
     "enabled": true,
     "rpc_socket": "/var/run/arduino-router.sock",
     "rpc_timeout_seconds": 5,
-    "api_enabled": false,
-    "api_host": "127.0.0.1",
-    "api_port": 8770,
     "step": 60,
     "openness_step": 0.05,
     "joints": [

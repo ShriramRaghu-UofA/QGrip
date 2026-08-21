@@ -502,19 +502,15 @@ def _parse_inference(raw: object) -> InferenceConfig:
 
 
 def _parse_dashboard(raw: object) -> DashboardConfig:
-    """Validate dashboard bind settings and its optional Handi observer proxy."""
+    """Validate dashboard bind settings."""
     data = _object(raw, "dashboard")
-    _only(data, {"host", "port", "handi_url", "handi_timeout_seconds"}, "dashboard")
+    _only(data, {"host", "port"}, "dashboard")
     port = _integer(data.get("port", 8765), "dashboard.port", minimum=1)
     if port > 65535:
         raise ValidationError("dashboard.port must be <= 65535")
     return DashboardConfig(
         _string(data.get("host", "127.0.0.1"), "dashboard.host"),
         port,
-        _optional_string(data.get("handi_url"), "dashboard.handi_url"),
-        _finite(
-            data.get("handi_timeout_seconds", 2), "dashboard.handi_timeout_seconds", positive=True
-        ),
     )
 
 
@@ -529,9 +525,6 @@ def _parse_handi(raw: object | None) -> HandiConfig | None:
             "enabled",
             "rpc_socket",
             "rpc_timeout_seconds",
-            "api_enabled",
-            "api_host",
-            "api_port",
             "step",
             "openness_step",
             "joints",
@@ -580,9 +573,6 @@ def _parse_handi(raw: object | None) -> HandiConfig | None:
         rpc_timeout_seconds=_finite(
             data.get("rpc_timeout_seconds", 1), "handi.rpc_timeout_seconds", positive=True
         ),
-        api_enabled=bool(data.get("api_enabled", False)),
-        api_host=_string(data.get("api_host", "127.0.0.1"), "handi.api_host"),
-        api_port=_integer(data.get("api_port", 8770), "handi.api_port", minimum=1),
         step=_finite(data.get("step", 5), "handi.step", positive=True),
         openness_step=_finite(
             data.get("openness_step", 0.1), "handi.openness_step", positive=True
@@ -789,5 +779,5 @@ def default_profile(kind: DeviceKind | str = DeviceKind.SYNTHETIC) -> dict[str, 
             "idle_poll_seconds": 0.002,
             "maximum_wait_seconds": 0.01,
         },
-        "dashboard": {"host": "127.0.0.1", "port": 8765, "handi_timeout_seconds": 2.0},
+        "dashboard": {"host": "127.0.0.1", "port": 8765},
     }
