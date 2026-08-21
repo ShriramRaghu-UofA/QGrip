@@ -15,7 +15,7 @@ from sifi_streamer.acquisition.health import HealthThresholds
 from sifi_streamer.acquisition.runtime import AcquisitionMonitor
 from sifi_streamer.sifi import BridgeTransport, SiFiBridgeDevice, SyntheticSiFiDevice
 
-from qgrip.domain import (
+from qgrip.core.domain import (
     AcquisitionConfig,
     DeviceConfig,
     DeviceKind,
@@ -23,7 +23,7 @@ from qgrip.domain import (
     Prediction,
     SignalHealthSeverity,
 )
-from qgrip.errors import DeviceError
+from qgrip.core.errors import DeviceError
 
 EMG_STREAM_ID = "emg_armband"
 

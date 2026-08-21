@@ -18,7 +18,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, cast
 
-from qgrip.domain import (
+from qgrip.core.domain import (
     DEFAULT_ACTIVATION_LEVELS,
     LED_MATRIX_PIXELS,
     AcquisitionConfig,
@@ -38,7 +38,7 @@ from qgrip.domain import (
     SGTConfig,
     TrainingConfig,
 )
-from qgrip.errors import ValidationError
+from qgrip.core.errors import ValidationError
 
 SCHEMA_VERSION = 1
 

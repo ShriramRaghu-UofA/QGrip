@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from qgrip.training import (
+from qgrip.ml.training import (
     ActivationConditionedCrossEntropy,
     _fit_activation_calibration,
 )

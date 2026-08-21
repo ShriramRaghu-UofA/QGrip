@@ -13,14 +13,29 @@ from collections.abc import Sequence
 from dataclasses import asdict, replace
 from pathlib import Path
 
-from qgrip.artifacts import discover_artifacts, export_capture, latest_capture
-from qgrip.assets import DEFAULT_GESTURES, GESTURE_ASSETS, LIBEMG_CITATION_URL, download_assets
-from qgrip.domain import SGTRequest, TrainingRequest
-from qgrip.errors import QGripError, ValidationError
-from qgrip.handi import HandiRuntime
-from qgrip.profiles import default_profile, load_profile, profile_document, write_profile_atomic
-from qgrip.streaming import LiveEMGSession, PredictionDebouncer, check_streamer_device
-from qgrip.workflows import CalibrationService, InferenceService, SGTService, TrainingService
+from qgrip.capture.artifacts import discover_artifacts, export_capture, latest_capture
+from qgrip.capture.assets import (
+    DEFAULT_GESTURES,
+    GESTURE_ASSETS,
+    LIBEMG_CITATION_URL,
+    download_assets,
+)
+from qgrip.capture.streaming import LiveEMGSession, PredictionDebouncer, check_streamer_device
+from qgrip.core.domain import SGTRequest, TrainingRequest
+from qgrip.core.errors import QGripError, ValidationError
+from qgrip.core.profiles import (
+    default_profile,
+    load_profile,
+    profile_document,
+    write_profile_atomic,
+)
+from qgrip.runtime.handi import HandiRuntime
+from qgrip.runtime.workflows import (
+    CalibrationService,
+    InferenceService,
+    SGTService,
+    TrainingService,
+)
 
 
 def _profile_argument(parser: argparse.ArgumentParser) -> None:
@@ -110,7 +125,7 @@ def _run_handi(args: argparse.Namespace) -> int:
     runtime = HandiRuntime(profile, str(args.model))
     config = profile.handi
     assert config is not None
-    logging.getLogger("qgrip.handi").info(
+    logging.getLogger("qgrip.runtime.handi").info(
         "device=%s model=%s labels=%s mapping=%s limits=%s start=%s",
         profile.device,
         runtime.model.metadata.get("model_name"),
@@ -221,7 +236,7 @@ def dispatch(args: argparse.Namespace) -> int:
 
         import uvicorn
 
-        from qgrip.api import create_app
+        from qgrip.runtime.api import create_app
 
         token = secrets.token_urlsafe(24)
         print(

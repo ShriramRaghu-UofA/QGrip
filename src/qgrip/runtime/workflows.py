@@ -16,14 +16,22 @@ from typing import Any, cast
 import numpy as np
 from sifi_streamer.acquisition import create_capture_runtime
 
-from qgrip.artifacts import (
+from qgrip.capture.artifacts import (
     calibration_path,
     derive_calibration,
     export_capture,
     load_calibration,
     new_capture_path,
 )
-from qgrip.domain import (
+from qgrip.capture.streaming import (
+    EMG_STREAM_ID,
+    LiveEMGSession,
+    PredictionDebouncer,
+    sample_rates_match,
+    streamer_config,
+    streamer_device_factory,
+)
+from qgrip.core.domain import (
     EpochMetric,
     JobState,
     JobStatus,
@@ -35,15 +43,7 @@ from qgrip.domain import (
     TrainingRequest,
     TrainingSummary,
 )
-from qgrip.errors import ArtifactError, BusyError, DeviceError
-from qgrip.streaming import (
-    EMG_STREAM_ID,
-    LiveEMGSession,
-    PredictionDebouncer,
-    sample_rates_match,
-    streamer_config,
-    streamer_device_factory,
-)
+from qgrip.core.errors import ArtifactError, BusyError, DeviceError
 
 ProgressCallback = Callable[[SGTProgress], None]
 
@@ -572,7 +572,7 @@ class TrainingService:
     ) -> Path:
         """Lazily import Torch training and delegate the typed request to it."""
         try:
-            from qgrip.training import TorchTrainingService
+            from qgrip.ml.training import TorchTrainingService
         except ImportError as exc:
             raise ArtifactError(
                 "training requires the qgrip train extra: uv sync --extra train"
@@ -591,7 +591,7 @@ class InferenceService:
         try:
             import torch
 
-            from qgrip.models import (
+            from qgrip.ml.models import (
                 ONNXEMGClassifier,
                 checkpoint_model_config,
                 load_checkpoint,

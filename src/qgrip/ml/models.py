@@ -15,7 +15,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from qgrip.domain import ModelName, NormalizationMode
+from qgrip.core.domain import ModelName, NormalizationMode
 
 MODEL_NAMES: tuple[ModelName, ...] = tuple(ModelName)
 CHECKPOINT_VERSION = 1

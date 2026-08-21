@@ -26,8 +26,6 @@ Standalone Handi entry point
                                                      +--> MessagePack-RPC
                                                            |
                                                            +--> UNO Q Arduino Router
-
-Dashboard backend -- optional HTTP proxy --> standalone Handi observer API
 ```
 
 Dependencies point inward. Wire and command adapters depend on workflow services;
@@ -37,21 +35,23 @@ models, and untyped third-party data is converted at the boundary.
 
 ## Source map
 
+Modules are grouped into subpackages by function:
+
 | Module | Responsibility |
 | --- | --- |
-| `domain.py` | Frozen, slotted configuration and result values plus shared enums |
-| `profiles.py` | Strict schema-version-1 parsing, relative-path resolution, defaults, and atomic profile writes |
-| `streaming.py` | `sifi-streamer` configuration, device factories, Myo protocol adapter, live rolling windows, health, and prediction debounce |
-| `workflows.py` | Screen-guided capture, lazy training/inference facades, and process-local job coordination |
-| `artifacts.py` | Capture inspection, strict capture-to-Parquet projection, activation-energy derivation, and artifact discovery |
-| `training.py` | Window construction, split/calibration logic, Torch optimization, metrics, and artifact creation |
-| `models.py` | Shared preprocessing, four classifiers, strict checkpoint loading, ONNX export, and ONNX Runtime adapter |
-| `api.py` | Token-protected dashboard HTTP/SSE adapter and optional Handi proxy |
-| `cli.py` | Argparse adapter and foreground lifecycle ownership |
-| `handi.py` | Standalone inference-to-motor runtime and safety limits |
-| `handi_api.py` | Optional loopback observer and calibration-jog API around a running Handi runtime |
-| `rpc.py` | Concurrent MessagePack-RPC client for the Arduino Router Unix socket |
-| `assets.py` | Explicit, checksum-verified gesture-image download |
+| `core/domain.py` | Frozen, slotted configuration and result values plus shared enums |
+| `core/errors.py` | Stable domain errors shared by command and HTTP adapters |
+| `core/profiles.py` | Strict schema-version-1 parsing, relative-path resolution, defaults, and atomic profile writes |
+| `capture/streaming.py` | `sifi-streamer` configuration, device factories, Myo protocol adapter, live rolling windows, health, and prediction debounce |
+| `capture/artifacts.py` | Capture inspection, strict capture-to-Parquet projection, activation-energy derivation, and artifact discovery |
+| `capture/assets.py` | Explicit, checksum-verified gesture-image download |
+| `capture/rpc.py` | Concurrent MessagePack-RPC client for the Arduino Router Unix socket |
+| `ml/training.py` | Window construction, split/calibration logic, Torch optimization, metrics, and artifact creation |
+| `ml/models.py` | Shared preprocessing, four classifiers, strict checkpoint loading, ONNX export, and ONNX Runtime adapter |
+| `runtime/workflows.py` | Screen-guided capture, lazy training/inference facades, and process-local job coordination |
+| `runtime/api.py` | Token-protected dashboard HTTP/SSE adapter |
+| `runtime/cli.py` | Argparse adapter and foreground lifecycle ownership |
+| `runtime/handi.py` | Standalone inference-to-motor runtime and safety limits |
 
 `src/qgrip/vendor/` is third-party source and is not part of QGrip's application cleanup
 surface. `src/qgrip/dashboard/` contains built frontend output packaged in the wheel;

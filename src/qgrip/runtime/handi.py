@@ -9,7 +9,9 @@ from collections.abc import Callable
 from dataclasses import replace
 from typing import Protocol
 
-from qgrip.domain import (
+from qgrip.capture.rpc import MessagePackRpcClient
+from qgrip.capture.streaming import LiveEMGSession, PredictionDebouncer, sample_rates_match
+from qgrip.core.domain import (
     LED_MATRIX_PIXELS,
     ControllerState,
     HandiConfig,
@@ -17,12 +19,10 @@ from qgrip.domain import (
     Prediction,
     QGripProfile,
 )
-from qgrip.errors import RpcError, ValidationError
-from qgrip.rpc import MessagePackRpcClient
-from qgrip.streaming import LiveEMGSession, PredictionDebouncer, sample_rates_match
-from qgrip.workflows import InferenceService
+from qgrip.core.errors import RpcError, ValidationError
+from qgrip.runtime.workflows import InferenceService
 
-LOGGER = logging.getLogger("qgrip.handi")
+LOGGER = logging.getLogger("qgrip.runtime.handi")
 HANDI_BRICK_REPOSITORY_URL = "https://github.com/YOUR-ORG/HANDI-BRICK-REPOSITORY"
 
 
@@ -342,6 +342,6 @@ def main() -> int:
     """Expose the Handi-only console script without a separate entry module."""
     import sys
 
-    from qgrip.cli import main as qgrip_main
+    from qgrip.runtime.cli import main as qgrip_main
 
     return qgrip_main(["handi", "run", *sys.argv[1:]])

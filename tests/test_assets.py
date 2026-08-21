@@ -6,8 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from qgrip.assets import GESTURE_ASSETS, GestureAsset, download_assets
-from qgrip.errors import ArtifactError
+from qgrip.capture.assets import GESTURE_ASSETS, GestureAsset, download_assets
+from qgrip.core.errors import ArtifactError
 
 
 class AssetTests(unittest.TestCase):
@@ -21,7 +21,7 @@ class AssetTests(unittest.TestCase):
             with (
                 patch.dict(GESTURE_ASSETS, assets, clear=True),
                 patch(
-                    "qgrip.assets.urllib.request.urlopen", return_value=io.BytesIO(content)
+                    "qgrip.capture.assets.urllib.request.urlopen", return_value=io.BytesIO(content)
                 ) as get,
             ):
                 self.assertEqual(download_assets(target, ["rest"]), 1)
@@ -43,7 +43,7 @@ class AssetTests(unittest.TestCase):
             (target / "rest.png").write_bytes(content)
             with (
                 patch.dict(GESTURE_ASSETS, assets, clear=True),
-                patch("qgrip.assets.urllib.request.urlopen") as get,
+                patch("qgrip.capture.assets.urllib.request.urlopen") as get,
             ):
                 self.assertEqual(download_assets(target, ["rest"]), 1)
             get.assert_not_called()

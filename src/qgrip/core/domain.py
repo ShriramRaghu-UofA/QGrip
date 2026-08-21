@@ -49,7 +49,7 @@ class NormalizationMode(StrEnum):
 
 
 class JobState(StrEnum):
-    """Lifecycle state reported by :class:`~qgrip.workflows.WorkflowCoordinator`."""
+    """Lifecycle state reported by :class:`~qgrip.runtime.workflows.WorkflowCoordinator`."""
 
     IDLE = "idle"
     RUNNING = "running"

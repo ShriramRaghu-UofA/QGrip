@@ -1,8 +1,8 @@
 import unittest
 
-from qgrip.domain import GripPreset, HandiConfig, JointLimit, Prediction
-from qgrip.errors import ValidationError
-from qgrip.handi import HandController
+from qgrip.core.domain import GripPreset, HandiConfig, JointLimit, Prediction
+from qgrip.core.errors import ValidationError
+from qgrip.runtime.handi import HandController
 
 
 class FakeRpc:

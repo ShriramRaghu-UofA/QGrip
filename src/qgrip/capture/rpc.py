@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from types import TracebackType
 from typing import Any, Self
 
-from qgrip.errors import RpcError
+from qgrip.core.errors import RpcError
 
 REQUEST = 0
 RESPONSE = 1

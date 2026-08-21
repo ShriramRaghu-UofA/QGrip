@@ -17,8 +17,9 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
-from qgrip.artifacts import discover_artifacts, load_calibration, subject_root
-from qgrip.domain import (
+from qgrip.capture.artifacts import discover_artifacts, load_calibration, subject_root
+from qgrip.capture.streaming import check_streamer_device
+from qgrip.core.domain import (
     JobState,
     JobStatus,
     ModelName,
@@ -27,10 +28,9 @@ from qgrip.domain import (
     SGTRequest,
     TrainingRequest,
 )
-from qgrip.errors import ArtifactError, QGripError
-from qgrip.profiles import load_profile
-from qgrip.streaming import check_streamer_device
-from qgrip.workflows import WorkflowCoordinator
+from qgrip.core.errors import ArtifactError, QGripError
+from qgrip.core.profiles import load_profile
+from qgrip.runtime.workflows import WorkflowCoordinator
 
 
 def notification_for(status: JobStatus) -> dict[str, object] | None:
@@ -304,7 +304,7 @@ def create_app(
         owner.close()
         return {"stopping": True}
 
-    assets = Path(__file__).parent / "dashboard"
+    assets = Path(__file__).parent.parent / "dashboard"
     if assets.exists():
         app.mount(
             "/assets", StaticFiles(directory=assets / "assets", check_dir=False), name="assets"
