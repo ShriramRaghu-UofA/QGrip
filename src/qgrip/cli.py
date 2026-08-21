@@ -97,7 +97,6 @@ def build_parser() -> argparse.ArgumentParser:
     run = handi_commands.add_parser("run", help="standalone UNO Q runtime")
     _profile_argument(run)
     run.add_argument("--model", type=Path, required=True)
-    run.add_argument("--no-api", action="store_true")
     calibrate = handi_commands.add_parser("calibrate")
     _profile_argument(calibrate)
     calibrate.add_argument("--output", type=Path, required=True)
@@ -112,34 +111,17 @@ def _run_handi(args: argparse.Namespace) -> int:
     config = profile.handi
     assert config is not None
     logging.getLogger("qgrip.handi").info(
-        "device=%s model=%s labels=%s mapping=%s limits=%s start=%s api=%s",
+        "device=%s model=%s labels=%s mapping=%s limits=%s start=%s",
         profile.device,
         runtime.model.metadata.get("model_name"),
         runtime.model.labels,
         dict(config.gesture_mapping),
         config.joints,
         {item.name: item.start for item in config.joints},
-        "disabled" if args.no_api else f"{config.api_host}:{config.api_port}",
     )
     for event in (signal.SIGINT, signal.SIGTERM):
         signal.signal(event, lambda _signum, _frame: runtime.stop())
-    if args.no_api or not config.api_enabled:
-        runtime.run()
-        return 0
-    from qgrip.handi_api import create_handi_app
-
-    worker = threading.Thread(target=runtime.run, name="qgrip-handi-runtime", daemon=False)
-    worker.start()
-    try:
-        import uvicorn
-
-        uvicorn.run(
-            create_handi_app(runtime), host=config.api_host, port=config.api_port, workers=1
-        )
-    finally:
-        runtime.stop()
-        worker.join(timeout=10)
-        runtime.close()
+    runtime.run()
     return 0
 
 
