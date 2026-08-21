@@ -171,8 +171,9 @@ class SyntheticWorkflowTests(unittest.TestCase):
             self.assertNotIn("channels", model_metadata)
             self.assertNotIn("sample_rate", model_metadata)
             self.assertEqual(model_metadata["model_config"]["n_channels"], 8)
-            prediction = InferenceService(checkpoint).predict(
-                tuple(tuple(0.0 for _ in range(8)) for _ in range(4))
+            inference = InferenceService(checkpoint)
+            prediction = inference.predict(
+                np.zeros((inference.window_size, inference.channels), dtype=np.float32)
             )
             self.assertIn(prediction.gesture, profile.sgt.gestures)
             self.assertGreaterEqual(prediction.activation, 0)
@@ -214,8 +215,9 @@ class SyntheticWorkflowTests(unittest.TestCase):
                 ),
                 threading.Event(),
             )
-            prediction = InferenceService(checkpoint).predict(
-                tuple(tuple(0.0 for _ in range(8)) for _ in range(2))
+            inference = InferenceService(checkpoint)
+            prediction = inference.predict(
+                np.zeros((inference.window_size, inference.channels), dtype=np.float32)
             )
             self.assertEqual(prediction.activation, 1.0)
 

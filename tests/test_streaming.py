@@ -25,9 +25,13 @@ class LiveWindowTests(unittest.TestCase):
         session = LiveEMGSession(DeviceConfig(kind=DeviceKind.SYNTHETIC, channels=1))
         session._reader = _Reader()
         self.assertIsNone(session.next_window(4, 2))
-        self.assertEqual(session.next_window(4, 2), ((1.0,), (2.0,), (3.0,), (4.0,)))
+        np.testing.assert_array_equal(
+            session.next_window(4, 2), np.array([[1.0], [2.0], [3.0], [4.0]], dtype=np.float32)
+        )
         self.assertIsNone(session.next_window(4, 2))
-        self.assertEqual(session.next_window(4, 2), ((3.0,), (4.0,), (5.0,), (6.0,)))
+        np.testing.assert_array_equal(
+            session.next_window(4, 2), np.array([[3.0], [4.0], [5.0], [6.0]], dtype=np.float32)
+        )
 
     def test_myo_adapter_uses_the_profile_sample_rate(self) -> None:
         config = DeviceConfig(kind=DeviceKind.MYO_BLE, sample_rate_hz=250)

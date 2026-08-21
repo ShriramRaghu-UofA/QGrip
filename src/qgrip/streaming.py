@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import time
-from collections import deque
 from dataclasses import dataclass, replace
 from functools import partial
 from math import isclose
@@ -243,7 +242,8 @@ class LiveEMGSession:
         self._reader: Any | None = None
         self._stream = None
         self._cursor = 0
-        self._samples: deque[tuple[float, ...]] | None = None
+        self._samples: np.ndarray | None = None
+        self._filled = 0
         self._last_inference_end = 0
         self._emitted = False
         self._consumer_overruns = 0
@@ -262,6 +262,7 @@ class LiveEMGSession:
         self._reader = self._handle.stream_readers[EMG_STREAM_ID]
         self._cursor = 0
         self._samples = None
+        self._filled = 0
         self._last_inference_end = 0
         self._emitted = False
         self._consumer_overruns = 0
@@ -311,9 +312,7 @@ class LiveEMGSession:
             self._consumer_overruns,
         )
 
-    def next_window(
-        self, size: int, minimum_new_samples: int
-    ) -> tuple[tuple[float, ...], ...] | None:
+    def next_window(self, size: int, minimum_new_samples: int) -> np.ndarray | None:
         """Return a valid rolling window after enough new EMG samples arrive.
 
         The cursor is absolute, so consumer timing does not determine which
@@ -331,8 +330,10 @@ class LiveEMGSession:
         if window is None:
             return None
         self._cursor = window.end_index
-        if self._samples is None or self._samples.maxlen != size:
-            self._samples = deque(maxlen=size)
+        if self._samples is None or self._samples.shape[0] != size:
+            channels = window.samples.shape[1]
+            self._samples = np.zeros((size, channels), dtype=np.float32)
+            self._filled = 0
             self._last_inference_end = 0
             self._emitted = False
         if window.overrun or not np.all(window.validity):
@@ -344,19 +345,26 @@ class LiveEMGSession:
                         warnings=(*self._health.warnings, "consumer ring-buffer overrun"),
                         consumer_overruns=self._consumer_overruns,
                     )
-            self._samples.clear()
+            self._filled = 0
             self._last_inference_end = window.end_index
             self._emitted = False
             self._update_health()
             return None
-        self._samples.extend(tuple(float(value) for value in row) for row in window.samples)
-        if len(self._samples) < size or (
+        new_rows = np.asarray(window.samples, dtype=np.float32)
+        n_new = new_rows.shape[0]
+        if n_new >= size:
+            self._samples[:] = new_rows[-size:]
+        else:
+            self._samples[: size - n_new] = self._samples[n_new:]
+            self._samples[size - n_new :] = new_rows
+        self._filled = min(size, self._filled + n_new)
+        if self._filled < size or (
             self._emitted and window.end_index - self._last_inference_end < minimum_new_samples
         ):
             return None
         self._last_inference_end = window.end_index
         self._emitted = True
-        return tuple(self._samples)
+        return self._samples.copy()
 
 
 def check_streamer_device(

@@ -646,21 +646,16 @@ class InferenceService:
         if len(labels) != int(model_config["n_classes"]):
             raise ArtifactError("checkpoint labels do not match model_config.n_classes")
         self.labels = tuple(labels)
-        self._samples: deque[tuple[float, ...]] = deque(maxlen=self.window_size)
 
-    def predict(self, samples: tuple[tuple[float, ...], ...]) -> Prediction:
-        """Append raw samples, left-pad short direct calls, and classify one model window."""
+    def predict(self, window: np.ndarray) -> Prediction:
+        """Classify one full model window of shape (window_size, channels)."""
         started = time.perf_counter()
-        for sample in samples:
-            if len(sample) != self.channels:
-                raise ArtifactError(
-                    f"model expects {self.channels} channels, received {len(sample)}"
-                )
-            self._samples.append(sample)
-        window = np.zeros((self.window_size, self.channels), dtype=np.float32)
-        buffered = np.asarray(self._samples, dtype=np.float32)
-        if len(buffered):
-            window[-len(buffered) :] = buffered
+        expected_shape = (self.window_size, self.channels)
+        if window.shape != expected_shape:
+            raise ArtifactError(
+                f"model expects a window of shape {expected_shape}, received {window.shape}"
+            )
+        window = np.asarray(window, dtype=np.float32)
         if self._onnx_model is not None:
             logits, activation_output = self._onnx_model.predict(window[None, ...])
             scores = np.asarray(logits[0], dtype=float)
