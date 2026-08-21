@@ -97,6 +97,24 @@ class ProfileTests(unittest.TestCase):
             with self.assertRaisesRegex(ValidationError, "energy_window_seconds"):
                 load_profile(path)
 
+    def test_grip_led_frame_must_be_104_values_in_0_to_7(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_profile(Path(directory), handi=True)
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["handi"]["grips"][0]["led_frame"] = [0] * 103
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaisesRegex(ValidationError, "led_frame"):
+                load_profile(path)
+
+            document["handi"]["grips"][0]["led_frame"] = [8] * 104
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaisesRegex(ValidationError, "led_frame"):
+                load_profile(path)
+
+            document["handi"]["grips"][0]["led_frame"] = None
+            path.write_text(json.dumps(document), encoding="utf-8")
+            self.assertIsNone(load_profile(path).handi.grips[0].led_frame)
+
     def test_incompatible_myo_options_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = write_profile(Path(directory))

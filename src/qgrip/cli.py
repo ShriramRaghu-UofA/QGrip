@@ -112,9 +112,10 @@ def _run_handi(args: argparse.Namespace) -> int:
     config = profile.handi
     assert config is not None
     logging.getLogger("qgrip.handi").info(
-        "device=%s model=%s mapping=%s limits=%s start=%s api=%s",
+        "device=%s model=%s labels=%s mapping=%s limits=%s start=%s api=%s",
         profile.device,
-        runtime.model.metadata,
+        runtime.model.metadata.get("model_name"),
+        runtime.model.labels,
         dict(config.gesture_mapping),
         config.joints,
         {item.name: item.start for item in config.joints},

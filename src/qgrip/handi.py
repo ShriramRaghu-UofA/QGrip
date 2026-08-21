@@ -10,6 +10,7 @@ from dataclasses import replace
 from typing import Protocol
 
 from qgrip.domain import (
+    LED_MATRIX_PIXELS,
     ControllerState,
     HandiConfig,
     Health,
@@ -55,8 +56,7 @@ class HandController:
             positions=tuple((joint.name, joint.start) for joint in config.joints)
         )
         self._connected = False
-        self._last_grip_switch: str | None = None
-        self._switch_count = 0
+        self._last_grip_step_gesture: str | None = None
 
     @property
     def state(self) -> ControllerState:
@@ -84,7 +84,11 @@ class HandController:
             position = joint.clamp(requested.get(joint.name, current[joint.name]))
             clamped[joint.name] = position
             wire_positions.append(round(position))
-        if not self.rpc.call("set_positions", wire_positions):
+        started = time.perf_counter()
+        ok = self.rpc.call("set_positions", wire_positions)
+        rpc_ms = (time.perf_counter() - started) * 1000
+        LOGGER.info("set_positions rpc=%6.2fms", rpc_ms)
+        if not ok:
             raise RpcError("set_positions was rejected by the MCU")
         with self._lock:
             self._state = replace(self._state, positions=tuple(clamped.items()))
@@ -100,11 +104,24 @@ class HandController:
         self._send_positions(positions)
         return position
 
+    def move_many(self, requested: dict[str, float]) -> None:
+        """Set several joints in one RPC call instead of one call per joint."""
+        self._send_positions({**dict(self.state.positions), **requested})
+
     def jog(self, name: str, delta: float) -> float:
         """Move one joint by a calibration-safe delta no larger than ``step``."""
         if abs(delta) > self.config.step:
             raise ValidationError(f"calibration jog is limited to {self.config.step}")
         return self.move(name, dict(self.state.positions)[name] + delta)
+
+    def cycle_grip(self, step: int) -> None:
+        """Advance to the next/previous grip preset, wrapping around the list."""
+        if not self.config.grips:
+            raise ValidationError("Handi profile defines no grip presets to cycle")
+        names = [grip.name for grip in self.config.grips]
+        current = self.state.grip
+        index = names.index(current) if current in names else -1
+        self.apply_grip(names[(index + step) % len(names)])
 
     def apply_grip(self, name: str) -> None:
         """Apply a named preset while retaining unspecified joints' current positions."""
@@ -116,6 +133,26 @@ class HandController:
         self._send_positions(positions)
         with self._lock:
             self._state = replace(self._state, grip=name)
+        if grip.led_frame is not None:
+            self._send_led_frame(grip.led_frame)
+
+    def _send_led_frame(self, frame: tuple[int, ...]) -> None:
+        """Best-effort push of a 104-pixel grayscale frame to the LED matrix.
+
+        Mirrors the Router's ``set_led_frame`` RPC (grayscale 0-7 values, wire
+        form is msgpack bin via ``bytes(frame)``). The matrix display is
+        cosmetic, so a failure here is logged rather than raised — it must
+        never abort a grip change that already moved the hand.
+        """
+        if len(frame) != LED_MATRIX_PIXELS:
+            raise ValidationError(f"led_frame must have {LED_MATRIX_PIXELS} values")
+        try:
+            ok = self.rpc.call("set_led_frame", bytes(frame))
+        except RpcError as exc:
+            LOGGER.warning("set_led_frame failed: %s", exc)
+            return
+        if not ok:
+            LOGGER.warning("set_led_frame rejected by MCU")
 
     def apply_prediction(self, prediction: Prediction) -> None:
         """Map an accepted model output to a clamped incremental or preset motion."""
@@ -123,13 +160,23 @@ class HandController:
         with self._lock:
             self._state = replace(self._state, prediction=prediction)
         if action is None:
+            self._last_grip_step_gesture = None
             return
         if action in {"open", "close"}:
+            self._last_grip_step_gesture = None
             direction = -1 if action == "open" else 1
             delta = direction * self.config.step * max(0, min(1, prediction.activation))
-            for joint in self.config.joints:
-                self.move(joint.name, dict(self.state.positions)[joint.name] + delta)
+            current = dict(self.state.positions)
+            self.move_many(
+                {joint.name: current[joint.name] + delta for joint in self.config.joints}
+            )
+        elif action in {"next", "prev"}:
+            if prediction.gesture == self._last_grip_step_gesture:
+                return  # still the same contraction that already stepped - no-op
+            self._last_grip_step_gesture = prediction.gesture
+            self.cycle_grip(1 if action == "next" else -1)
         elif any(grip.name == action for grip in self.config.grips):
+            self._last_grip_step_gesture = None
             self.apply_grip(action)
 
     def fail(self, message: str) -> None:
@@ -206,6 +253,7 @@ class HandiRuntime:
                 )
                 debouncer = PredictionDebouncer(self.profile.inference.switch_predictions)
                 self.start()
+                LOGGER.info("listening for gestures (Ctrl-C to stop)")
                 next_inference_at = time.monotonic()
                 while not self._stop.is_set():
                     wait_seconds = next_inference_at - time.monotonic()
@@ -220,6 +268,14 @@ class HandiRuntime:
                         if prediction.confidence < self.profile.inference.confidence_gate:
                             prediction = replace(prediction, gesture="rest")
                         accepted = debouncer.accept(prediction)
+                        LOGGER.info(
+                            "gesture=%-16s confidence=%.2f activation=%.2f infer=%6.2fms%s",
+                            prediction.gesture,
+                            prediction.confidence,
+                            prediction.activation,
+                            prediction.latency_ms,
+                            "  ACCEPTED" if accepted is not None else "",
+                        )
                         if accepted is not None:
                             self.controller.apply_prediction(accepted)
                         next_inference_at += self.profile.inference.inference_period_seconds
@@ -250,3 +306,12 @@ class HandiRuntime:
             self._closed = True
         self._stop.set()
         self.controller.close()
+
+
+def main() -> int:
+    """Expose the Handi-only console script without a separate entry module."""
+    import sys
+
+    from qgrip.cli import main as qgrip_main
+
+    return qgrip_main(["handi", "run", *sys.argv[1:]])

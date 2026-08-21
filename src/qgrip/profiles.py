@@ -20,6 +20,7 @@ from typing import Any, cast
 
 from qgrip.domain import (
     DEFAULT_ACTIVATION_LEVELS,
+    LED_MATRIX_PIXELS,
     AcquisitionConfig,
     DashboardConfig,
     DeviceConfig,
@@ -81,6 +82,18 @@ def _optional_integer(value: object, name: str, *, minimum: int) -> int | None:
 def _optional_finite(value: object, name: str, *, positive: bool = False) -> float | None:
     """Parse a finite-number constraint or preserve JSON ``null`` as ``None``."""
     return None if value is None else _finite(value, name, positive=positive)
+
+
+def _led_frame(value: object, name: str) -> tuple[int, ...] | None:
+    """Parse an optional 104-value grayscale (0-7) LED matrix frame, or ``None``."""
+    if value is None:
+        return None
+    if not isinstance(value, list) or len(value) != LED_MATRIX_PIXELS:
+        raise ValidationError(f"{name} must be an array of {LED_MATRIX_PIXELS} values")
+    frame = tuple(_integer(pixel, f"{name}[]", minimum=0) for pixel in value)
+    if any(pixel > 7 for pixel in frame):
+        raise ValidationError(f"{name} values must be in 0..7")
+    return frame
 
 
 def _boolean(value: object, name: str) -> bool:
@@ -539,12 +552,13 @@ def _parse_handi(raw: object | None) -> HandiConfig | None:
     grips: list[GripPreset] = []
     for item in cast(list[object], data.get("grips", [])):
         grip = _object(item, "grip")
-        _only(grip, {"name", "positions"}, "grip")
+        _only(grip, {"name", "positions", "led_frame"}, "grip")
         positions = _object(grip.get("positions", {}), "grip.positions")
         grips.append(
             GripPreset(
                 _string(grip.get("name"), "grip.name"),
                 tuple((name, _finite(value, f"grip.{name}")) for name, value in positions.items()),
+                _led_frame(grip.get("led_frame"), "grip.led_frame"),
             )
         )
     mapping = _object(

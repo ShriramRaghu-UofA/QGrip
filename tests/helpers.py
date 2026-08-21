@@ -79,7 +79,13 @@ def write_profile(root: Path, *, handi: bool = False) -> Path:
                 {"name": "thumb", "minimum": 10, "maximum": 20, "start": 15},
                 {"name": "index", "minimum": 100, "maximum": 200, "start": 150},
             ],
-            "grips": [{"name": "pinch", "positions": {"thumb": 19, "index": 180}}],
+            "grips": [
+                {
+                    "name": "pinch",
+                    "positions": {"thumb": 19, "index": 180},
+                    "led_frame": [0] * 104,
+                }
+            ],
             "gesture_mapping": {"open": "open", "close": "close", "flexion": "pinch"},
         }
     path = root / "profile.json"

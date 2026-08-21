@@ -40,7 +40,7 @@ handi = [
 
 [project.scripts]
 qgrip = "qgrip.cli:main"
-qgrip-rpc-handi = "qgrip.handi_entry:main"
+qgrip-rpc-handi = "qgrip.handi:main"
 
 [dependency-groups]
 dev = [
@@ -53,12 +53,18 @@ name = "pytorch-cu132"
 url = "https://download.pytorch.org/whl/cu132"
 explicit = true
 
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [tool.uv]
 default-groups = ["dev"]
 
 [tool.uv.sources]
 torch = [
     { index = "pytorch-cu132", marker = "(sys_platform == 'linux' or sys_platform == 'win32') and platform_machine != 'aarch64' and platform_machine != 'ARM64'" },
+    { index = "pytorch-cpu", marker = "sys_platform == 'linux' and (platform_machine == 'aarch64' or platform_machine == 'ARM64')" },
 ]
 
 [tool.ruff]

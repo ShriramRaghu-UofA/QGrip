@@ -8,6 +8,11 @@ from pathlib import Path
 
 DEFAULT_ACTIVATION_LEVELS: tuple[float, ...] = (0.25, 0.5, 0.75, 1.0)
 
+#: UNO Q LED matrix geometry (8 rows x 13 cols) — see GripPreset.led_frame.
+LED_MATRIX_ROWS = 8
+LED_MATRIX_COLS = 13
+LED_MATRIX_PIXELS = LED_MATRIX_ROWS * LED_MATRIX_COLS
+
 
 class DeviceKind(StrEnum):
     """Acquisition transports supported by a profile's :class:`DeviceConfig`."""
@@ -242,10 +247,16 @@ class JointLimit:
 
 @dataclass(frozen=True, slots=True)
 class GripPreset:
-    """Named multi-joint target pose used by a Handi gesture mapping."""
+    """Named multi-joint target pose used by a Handi gesture mapping.
+
+    ``led_frame``, when set, is a 104-value grayscale (0-7) LED matrix frame
+    (row-major, 8 rows x 13 cols) sent alongside the pose via the Router's
+    ``set_led_frame`` RPC so the matrix reflects the active grip.
+    """
 
     name: str
     positions: tuple[tuple[str, float], ...]
+    led_frame: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
