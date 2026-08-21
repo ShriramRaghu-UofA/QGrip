@@ -229,3 +229,4 @@ bin/
 
 # User-downloaded gesture images and manifest
 /assets/
+data/
