@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
-from qgrip.artifacts import discover_artifacts
+from qgrip.artifacts import discover_artifacts, load_calibration, subject_root
 from qgrip.domain import (
     JobState,
     JobStatus,
@@ -27,7 +27,7 @@ from qgrip.domain import (
     SGTRequest,
     TrainingRequest,
 )
-from qgrip.errors import QGripError
+from qgrip.errors import ArtifactError, QGripError
 from qgrip.profiles import load_profile
 from qgrip.streaming import check_streamer_device
 from qgrip.workflows import WorkflowCoordinator
@@ -147,6 +147,7 @@ def create_app(
             "device": current.device.kind,
             "gestures": current.sgt.gestures,
             "models": list(ModelName),
+            "proportional": current.sgt.proportional,
             "activation_tolerance": current.sgt.activation_tolerance,
         }
 
@@ -158,7 +159,19 @@ def create_app(
     @app.get("/api/v1/artifacts", dependencies=protected)
     def artifacts(subject: str | None = None) -> dict[str, object]:
         """List known artifacts globally or within one subject directory."""
-        return {"artifacts": [str(path) for path in discover_artifacts(current, subject)]}
+        calibration_ready = False
+        if subject is not None:
+            calibration = subject_root(current, subject) / "calibration.json"
+            if calibration.exists():
+                try:
+                    load_calibration(calibration, current)
+                    calibration_ready = True
+                except ArtifactError:
+                    pass
+        return {
+            "artifacts": [str(path) for path in discover_artifacts(current, subject)],
+            "calibration_ready": calibration_ready,
+        }
 
     @app.post("/api/v1/sgt/start", dependencies=protected)
     def start_sgt(body: SGTWire) -> dict[str, object]:

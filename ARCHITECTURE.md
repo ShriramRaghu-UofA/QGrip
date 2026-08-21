@@ -78,9 +78,10 @@ The sections have distinct owners:
 - `handi`, when present, defines the Router socket, API, verified joints, grip presets,
   step size, and gesture-to-action mapping.
 
-Proportional/discrete mode is carried on each SGT and training request. Although schema
-version 1 currently serializes `sgt.proportional`, the CLI and dashboard adapters do not
-consume that field; they default requests to proportional unless discrete is selected.
+Proportional/discrete mode is carried on each SGT and training request. The dashboard uses
+`sgt.proportional` as its collection mode and requires a valid subject calibration before
+enabling proportional capture. The CLI defaults to proportional unless `--discrete` is
+selected.
 
 `profile_document()` serializes the resolved typed value. `write_profile_atomic()` writes
 and flushes a temporary file, atomically replaces the target, and validates the result.

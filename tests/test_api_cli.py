@@ -19,9 +19,11 @@ class AdapterTests(unittest.TestCase):
                 bootstrap = client.get("/api/v1/bootstrap", headers={"X-QGrip-Token": "secret"})
                 self.assertEqual(bootstrap.status_code, 200)
                 self.assertEqual(bootstrap.json()["activation_tolerance"], 0.1)
+                self.assertTrue(bootstrap.json()["proportional"])
                 self.assertEqual(client.get("/api/v1/artifacts").status_code, 401)
                 response = client.get("/api/v1/artifacts", headers={"X-QGrip-Token": "secret"})
                 self.assertEqual(response.status_code, 200)
+                self.assertFalse(response.json()["calibration_ready"])
 
     def test_stream_requires_a_token(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

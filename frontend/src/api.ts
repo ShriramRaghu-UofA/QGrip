@@ -8,6 +8,7 @@ export interface Bootstrap {
   device: string;
   gestures: string[];
   models: string[];
+  proportional: boolean;
   activation_tolerance: number;
 }
 
@@ -92,6 +93,7 @@ export interface LiveSignalHealth {
 /** Artifact-discovery response body. */
 export interface ArtifactList {
   artifacts: string[];
+  calibration_ready: boolean;
 }
 
 /**

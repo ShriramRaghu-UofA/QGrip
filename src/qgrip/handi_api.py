@@ -10,6 +10,7 @@ from qgrip.handi import HandiRuntime
 
 class JogWire(BaseModel):
     """Strict HTTP request body for a bounded Handi calibration jog."""
+
     model_config = ConfigDict(extra="forbid")
     joint: str
     delta: float

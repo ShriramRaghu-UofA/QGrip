@@ -19,6 +19,7 @@ LIBEMG_CITATION_URL = f"{LIBEMG_GESTURES_URL}/tree/{LIBEMG_GESTURES_COMMIT}"
 @dataclass(frozen=True, slots=True)
 class GestureAsset:
     """Pinned upstream image path and SHA-256 digest for one gesture prompt."""
+
     source: str
     sha256: str
 

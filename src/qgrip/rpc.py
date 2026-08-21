@@ -18,6 +18,7 @@ NOTIFY = 2
 @dataclass(slots=True)
 class _Pending:
     """One in-flight request's completion signal and eventual response payload."""
+
     event: threading.Event = field(default_factory=threading.Event)
     result: object = None
     error: object = None

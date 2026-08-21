@@ -15,136 +15,113 @@ The capture log is the source of truth. Parquet datasets, model checkpoints, ONN
 exports, metadata, and metrics are derived artifacts written under the profile's
 `data_root`.
 
-## Quick start
+## Get started
 
-```powershell
-uv sync --locked --all-extras --dev
-uv run qgrip profile create synthetic.json --device synthetic
-uv run qgrip doctor --profile synthetic.json
-uv run qgrip sgt demo --profile synthetic.json
-uv run qgrip export demo --profile synthetic.json
-uv run qgrip train demo --profile synthetic.json
-uv run qgrip web --profile synthetic.json
-```
+The web app is the recommended way to use QGrip. It provides visible prompts for
+data collection and guides you through setup, capture, export, training, and live
+validation. These instructions assume a source checkout on Windows with
+[Python 3.14 or newer](https://www.python.org/downloads/) and
+[`uv`](https://docs.astral.sh/uv/getting-started/installation/) installed.
 
-The synthetic profile is useful for checking the software path. For a physical
-device, create the appropriate `sifi`, `myo_ble`, or `myo_dongle` profile and edit
-its device settings before running `doctor`.
+### Web app (recommended)
 
-### Installation groups
+1. Install QGrip and all optional features from the repository root:
 
-The quick start installs every optional dependency. Smaller deployments can select
-only the groups they need:
+   ```powershell
+   uv sync --locked --all-extras --dev
+   ```
 
-| Group | Needed for |
-| --- | --- |
-| base package | profiles, SiFi/synthetic acquisition, capture/export, CLI, and dashboard |
-| `train` | Torch training and Torch-backed inference |
-| `onnx` | ONNX Runtime inference; use with `train` because checkpoint metadata is loaded through Torch |
-| `myo` | Myo BLE or USB-dongle transports |
-| `handi` | MessagePack RPC to the UNO Q Arduino Router |
+2. Create a profile for your device. Use `synthetic` to try QGrip without hardware:
 
-For example, a training workstation that uses SiFi and ONNX can run
-`uv sync --locked --extra train --extra onnx`; an UNO Q Handi deployment normally
-needs `train`, `onnx`, and `handi`. The `--all-extras --dev` form remains the simplest
-source-development setup.
+   ```powershell
+   uv run qgrip profile create synthetic.json --device synthetic
+   ```
 
-## Choose a workflow
+   For a SiFi device, create a SiFi profile instead:
 
-Use the dashboard when an operator needs guided collection, artifact selection, and
-a live validation display. Use the CLI when the workflow is being scripted or run
-without a browser. Use the Python API when another application needs to receive
-predictions in-process. All three use the profile, typed workflow services, and
-device adapters described below.
+   ```powershell
+   uv run qgrip profile create sifi.json --device sifi
+   ```
 
-Only one hardware-owning activity may run in a process. Do not run a CLI inference
-loop, dashboard inference job, Handi runtime, or another `LiveEMGSession` at the
-same time against the same process/device.
+   Myo users can replace `sifi` with `myo_ble` or `myo_dongle`. Open the generated
+   profile and review its device settings before continuing with physical hardware.
+   The remaining examples use `synthetic.json`; substitute your own profile filename.
 
-## Launching the web dashboard
+3. Download the gesture images used by the collection screen. Passing the profile
+   downloads its configured gestures into its configured `assets_root`:
 
-From a source checkout, install the locked environment and create or select a
-profile, then start the server:
+   ```powershell
+   uv run qgrip assets download --profile synthetic.json
+   ```
 
-```powershell
-uv sync --locked --all-extras --dev
-uv run qgrip profile create synthetic.json --device synthetic
-uv run qgrip web --profile synthetic.json
-```
+4. If you are using SiFi, download the tested SiFi bridge supplied by
+   `sifi-streamer`:
 
-QGrip prints a launch URL similar to:
+   ```powershell
+   uv run sifi-download-bridge --tested
+   ```
 
-```text
-QGrip dashboard: http://127.0.0.1:8765/?token=...
-```
+   Skip this step for synthetic and Myo devices. QGrip launches the downloaded
+   bridge when it starts a SiFi operation and stops it during orderly shutdown.
 
-Open the complete printed URL in a browser. The per-launch token in that URL is
-required by the dashboard API, so opening `http://127.0.0.1:8765/` without it will
-not connect. Keep the terminal running while using the dashboard and press
-`Ctrl+C` to stop it.
+5. Validate the profile and check that QGrip can use the configured device:
 
-For an installed wheel, omit `uv run`:
+   ```powershell
+   uv run qgrip profile validate synthetic.json
+   uv run qgrip doctor --profile synthetic.json
+   ```
 
-```powershell
-qgrip web --profile C:\path\to\profile.json
-```
+6. Start the web app:
 
-The bind address and port come from the profile's `dashboard` section. The
-templates default to loopback access on port 8765:
+   ```powershell
+   uv run qgrip web --profile synthetic.json
+   ```
 
-```json
-{
-  "dashboard": {
-    "host": "127.0.0.1",
-    "port": 8765
-  }
-}
-```
+   QGrip prints a URL similar to:
 
-The compiled dashboard is included in the Python wheel; Node and the frontend
-source tree are not required to run it. Use Node only when developing or rebuilding
-the frontend.
+   ```text
+   QGrip dashboard: http://127.0.0.1:8765/?token=...
+   ```
 
-The dashboard guides the complete workflow:
+   Open the complete printed URL, including `?token=...`, in a browser. Keep the
+   terminal running while using QGrip; press `Ctrl+C` there when you are finished.
 
-1. **Setup** validates the selected profile and acquisition device.
-2. **Collect** runs SGT and preserves the authoritative JSONL capture.
-3. **Export** derives the canonical training Parquet from that capture.
-4. **Train** fits the selected Torch model and writes `model.pt`, `model.onnx`,
-   `metadata.json`, and `metrics.json` under `data/<subject>/models/<run-id>/`.
-5. **Validate** starts live acquisition and displays the predicted gesture,
-   confidence, proportional activation, latency, and prediction history.
+7. Complete the workflow in the web app:
 
-### Dashboard workflow, step by step
+   1. In **Setup**, enter a subject identifier and select **Connect device**.
+   2. In **Collect**, follow the numbered next step shown for the profile's collection mode:
+      - For **proportional** collection, complete the required subject calibration first.
+        Calibration records rest and maximum effort references for each gesture. When it
+        finishes successfully, training-data collection is unlocked.
+      - For **discrete** collection, calibration is skipped and training-data collection
+        is available immediately.
+   3. Start training-data collection and follow the screen-guided gesture prompts.
+   4. Export the completed capture to a Parquet training dataset.
+   5. In **Train**, select the dataset and a model preset, then wait for training to finish.
+   6. In **Validate**, select the generated `.pt` checkpoint and start live inference.
+   7. Stop the active job before closing QGrip or giving the device to another workflow.
 
-1. Create and validate a profile with `qgrip profile create` and `qgrip doctor`.
-2. Start `qgrip web --profile <profile.json>` and open the entire URL printed by
-   QGrip, including its token.
-3. In **Setup**, enter a subject identifier and use **Connect device** to verify the
-   same live acquisition path used by capture and inference.
-4. In **Collect**, start screen-guided training (SGT). Follow each prompt; choose
-   automatic or manual advancement as appropriate. QGrip writes an authoritative
-   JSONL capture log.
-5. Export the completed capture to Parquet from the collection screen.
-6. In **Train**, select a model preset and training data, then wait for the
-   checkpoint and derived artifacts to be produced.
-7. In **Validate**, select the generated `.pt` checkpoint and start live inference.
-   The screen shows the accepted gesture, confidence, activation, model latency,
-   signal health, and a prediction history. Stop the job before leaving the
-   hardware to another workflow.
+The collection log is the authoritative recording. Export creates a derived Parquet
+dataset, and training writes `model.pt`, `metadata.json`, and `metrics.json` under
+`data/<subject>/models/<run-id>/`. When ONNX export succeeds, the same directory also
+contains `model.onnx`.
 
-The dashboard API is token-protected. It starts live inference with
-`POST /api/v1/inference/start`, reports the latest accepted prediction through
-`GET /api/v1/inference/status`, and also publishes status updates through the
-authenticated server-sent-events endpoint `/api/v1/stream?token=...`. It is designed
-for controlling and observing live acquisition; it does not accept arbitrary EMG
-sample windows for one-off prediction.
+For an installed wheel, omit `uv run` from the commands. The compiled dashboard is
+included in the wheel, so Node and the frontend source are not required at runtime.
+The profile's `dashboard` section controls the bind address and port, which default to
+`127.0.0.1:8765`.
 
-## Command-line workflow
+The dashboard API is token-protected. Opening `http://127.0.0.1:8765/` without the
+printed token will not connect. The API controls live acquisition; it does not accept
+arbitrary EMG windows for one-off prediction.
 
-Run `uv run qgrip --help` to see the installed commands. From a source checkout,
-the following is the normal end-to-end flow. Replace `synthetic` with a real device
-profile and `demo` with your subject identifier when appropriate.
+### CLI workflow
+
+Use the CLI for scripted or externally cued workflows without a browser. Install
+QGrip first and download the bridge if you use SiFi; gesture images are optional for
+the CLI because it does not display visual prompts. Run `uv run qgrip --help` to see
+every command, or follow this end-to-end flow. Replace `synthetic.json` with your
+profile and `demo` with your subject identifier:
 
 ```powershell
 # Create, inspect, and validate a profile.
@@ -153,6 +130,7 @@ uv run qgrip profile validate synthetic.json
 uv run qgrip doctor --profile synthetic.json
 
 # Record a timed SGT session, then derive its training dataset.
+uv run qgrip sgt-calibrate demo --profile synthetic.json
 uv run qgrip sgt demo --profile synthetic.json
 uv run qgrip export demo --profile synthetic.json
 
@@ -160,9 +138,11 @@ uv run qgrip export demo --profile synthetic.json
 uv run qgrip train demo --profile synthetic.json
 ```
 
-`sgt` records proportional targets by default; add `--discrete` to that command for
-a flat discrete capture. Training mode is selected independently, so add
-`--discrete` to `train` as well when fitting a discrete model. `export` uses the
+Run `sgt-calibrate` before a subject's proportional collection. The calibration is
+required by `sgt` and can be repeated whenever new rest and maximum-effort references
+are needed. For a flat discrete capture, skip calibration and add `--discrete` to
+`sgt`. Training mode is selected independently, so add `--discrete` to `train` as
+well when fitting a discrete model. `export` uses the
 subject's latest capture by default, or accepts one or more explicit capture-log
 paths. `train` likewise uses the latest capture when `--input` is omitted and derives
 its Parquet file automatically if necessary. Repeat `--input <path>` to combine
@@ -170,8 +150,8 @@ specific capture logs or Parquet datasets, and use
 `--model transformer|cnn1d|cnn2d|dense` to override the profile default.
 
 Capture and training requests are authoritative for proportional/discrete mode. The
-currently serialized `sgt.proportional` profile field is not consumed by the CLI or
-dashboard adapters; both default to proportional unless their request selects discrete.
+dashboard uses the profile's `sgt.proportional` value for collection and training; the
+CLI defaults to proportional unless `--discrete` is supplied to both commands.
 
 The CLI `sgt` command follows the configured gesture/trial timing and writes the same
 markers as dashboard capture, but it does not render operator cues in the terminal. Use
@@ -184,7 +164,7 @@ Training creates a run directory under
 `onnx-error.txt` while preserving the usable Torch checkpoint. These artifacts are
 self-describing and are not overwritten.
 
-### Run live inference from the CLI
+#### Run live inference from the CLI
 
 Pass the generated checkpoint to `infer`:
 
@@ -203,6 +183,28 @@ predictions. With `inference.backend` set to `auto`, inference prefers an adjace
 ONNX artifact and falls back to Torch if the artifact or ONNX Runtime cannot be
 loaded. `torch` forces the checkpoint backend; `onnx` requires the adjacent ONNX
 artifact and fails instead of falling back.
+
+Only one hardware-owning activity may run in a process. Stop CLI inference, a
+dashboard job, or the Handi runtime before starting another operation that uses the
+same device.
+
+### Installation groups
+
+The setup above installs every optional dependency. Smaller deployments can select
+only the groups they need:
+
+| Group        | Needed for                                                                                   |
+|--------------|----------------------------------------------------------------------------------------------|
+| base package | profiles, SiFi/synthetic acquisition, capture/export, CLI, and dashboard                     |
+| `train`      | Torch training and Torch-backed inference                                                    |
+| `onnx`       | ONNX Runtime inference; use with `train` because checkpoint metadata is loaded through Torch |
+| `myo`        | Myo BLE or USB-dongle transports                                                             |
+| `handi`      | MessagePack RPC to the UNO Q Arduino Router                                                  |
+
+For example, a training workstation that uses SiFi and ONNX can run
+`uv sync --locked --extra train --extra onnx`; an UNO Q Handi deployment normally
+needs `train`, `onnx`, and `handi`. The `--all-extras --dev` form remains the simplest
+source-development setup.
 
 ## Use real-time inference from Python
 

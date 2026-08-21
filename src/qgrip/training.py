@@ -116,10 +116,7 @@ def _apply_subject_calibration(
     """Apply the subject's authoritative rest/max references to training windows."""
     rest_floor = float(cast(float, document["rest_floor"]))
     raw_references = cast(dict[str, object], document["class_references"])
-    references = {
-        label: float(cast(float, value))
-        for label, value in raw_references.items()
-    }
+    references = {label: float(cast(float, value)) for label, value in raw_references.items()}
     if any(label != "rest" and label not in references for label in labels):
         raise ArtifactError("subject calibration does not cover the training labels")
     activations = [
@@ -148,6 +145,7 @@ def _apply_subject_calibration(
 
 class ActivationConditionedCrossEntropy(nn.Module):
     """Cross-entropy target construction that blends low-effort gestures toward rest."""
+
     """Interpolate only between rest and the prompted gesture near zero activation."""
 
     def __init__(self, rest_index: int, smoothing_threshold: float) -> None:
@@ -191,6 +189,7 @@ class ActivationConditionedCrossEntropy(nn.Module):
 
 class EMGWindowDataset(Dataset[tuple[torch.Tensor, ...]]):
     """Validated, grouped EMG windows loaded from QGrip Parquet projections."""
+
     """Read canonical QGrip Parquet sessions into grouped EMG windows."""
 
     def __init__(
@@ -419,6 +418,7 @@ def _summarize_split(
 
 class TorchTrainingService:
     """Optional-Torch implementation of QGrip's deterministic training workflow."""
+
     def __init__(self, options: TrainingConfig) -> None:
         """Retain immutable profile training options for one training invocation."""
         self.options = options

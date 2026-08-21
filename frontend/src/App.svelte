@@ -24,6 +24,7 @@
   let bootstrap = $state.raw<Bootstrap | null>(null);
   let status = $state.raw<JobStatus>({ state: 'idle' });
   let artifacts = $state.raw<string[]>([]);
+  let calibrationReady = $state(false);
   let capturePath = $state('');
   let trainingInput = $state('');
   let modelPath = $state('');
@@ -63,6 +64,8 @@
   const progress = $derived(Math.round((status.progress ?? 0) * 100));
   const sgtRunning = $derived(status.kind === 'sgt' && status.state === 'running');
   const calibrationRunning = $derived(status.kind === 'calibration' && status.state === 'running');
+  const proportional = $derived(bootstrap?.proportional ?? true);
+  const deviceReady = $derived(doctor?.ready ?? false);
   const inferenceRunning = $derived(status.kind === 'inference' && status.state === 'running');
   const awaiting = $derived(!!status.awaiting_command);
   const stimulusUrl = $derived(
@@ -204,6 +207,7 @@
       `/api/v1/artifacts?subject=${encodeURIComponent(subject)}`
     );
     artifacts = response.artifacts ?? [];
+    calibrationReady = response.calibration_ready ?? false;
     trainingInput ||= artifacts.find((path) => path.endsWith('.parquet')) ?? '';
     modelPath ||= artifacts.find((path) => path.endsWith('.pt')) ?? '';
   }
@@ -234,6 +238,8 @@
     if (next.state !== 'running') {
       if (!sseActive) window.clearInterval(polling);
       if (wasRunning) {
+        if (next.kind === 'calibration' && next.state === 'completed' && next.result)
+          calibrationReady = true;
         if (next.kind === 'sgt' && next.result) capturePath = next.result;
         if (next.kind === 'export' && next.result) trainingInput = next.result;
         if (next.kind === 'training' && next.result) modelPath = next.result;
@@ -292,12 +298,28 @@
   /** Reset live telemetry and start the selected automatic or manual SGT collection. */
   function startCollection(): void {
     predictionHistory = [];
-    void start('/api/v1/sgt/start', { subject, discrete: false, auto: autoMode }, '/api/v1/sgt/status');
+    void start(
+      '/api/v1/sgt/start',
+      { subject, discrete: !proportional, auto: autoMode },
+      '/api/v1/sgt/status'
+    );
   }
 
   /** Start the canonical subject activation calibration. */
   function startCalibration(): void {
     void start('/api/v1/sgt/calibration/start', { subject }, '/api/v1/sgt/calibration/status');
+  }
+
+  /** Refresh subject-scoped prerequisites before opening the collection stage. */
+  async function continueToCollection(): Promise<void> {
+    calibrationReady = false;
+    try {
+      await loadArtifacts();
+      stage = 'Collect';
+      error = '';
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : String(cause);
+    }
   }
 
   /** Move between workflow panels with Alt+left and Alt+right keyboard shortcuts. */
@@ -356,7 +378,7 @@
 
       {#if stage === 'Setup'}
         <StagePanel title="Setup" description="Review the profile, connect the device, and confirm readiness before collecting." active>
-          <fieldset class="fieldset"><legend class="fieldset-legend">Subject</legend><input class="input w-full" bind:value={subject} autocomplete="off" /></fieldset>
+          <fieldset class="fieldset"><legend class="fieldset-legend">Subject</legend><input class="input w-full" bind:value={subject} autocomplete="off" oninput={() => { calibrationReady = false; capturePath = ''; trainingInput = ''; modelPath = ''; }} /></fieldset>
           <div class="stats stats-vertical bg-base-300 sm:stats-horizontal">
             <div class="stat"><div class="stat-title">Device</div><div class="stat-value text-xl">{bootstrap?.device ?? 'Loading…'}</div></div>
             <div class="stat"><div class="stat-title">Profile</div><div class="stat-desc max-w-72 truncate">{bootstrap?.profile ?? '—'}</div></div>
@@ -384,16 +406,54 @@
               {/if}
             </div>
           </div>
-          <div class="card-actions justify-end"><button class="btn btn-primary" onclick={() => { void loadArtifacts(); stage = 'Collect'; }}>Continue</button></div>
+          <div class="card-actions justify-end"><button class="btn btn-primary" disabled={!deviceReady} onclick={() => void continueToCollection()}>Continue to collection</button></div>
         </StagePanel>
       {:else if stage === 'Collect'}
-        <StagePanel title="Collect" description="Calibrate the subject, then follow the stepped target levels. Auto mode paces you automatically; manual mode waits after every hold." active>
+        <StagePanel title="Collect" description={proportional ? 'Complete subject calibration before collecting proportional training data.' : 'Discrete collection does not require subject activation calibration.'} active>
+          {#if !deviceReady}
+            <div class="alert alert-warning"><span>Connect and verify the device in Setup before starting a session.</span></div>
+          {/if}
+
+          <div class="grid gap-3 md:grid-cols-2">
+            {#if proportional}
+              <div class={['card border', calibrationReady ? 'border-success bg-success/10' : 'border-primary bg-primary/10']}>
+                <div class="card-body gap-2 p-4">
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="badge badge-primary badge-outline">Step 1</span>
+                    <span class={['badge', calibrationReady ? 'badge-success' : 'badge-warning']}>{calibrationReady ? 'Complete' : 'Required'}</span>
+                  </div>
+                  <h3 class="card-title text-lg">Calibrate activation</h3>
+                  <p class="text-sm text-base-content/70">Record rest and maximum effort for this subject so proportional targets can be measured.</p>
+                </div>
+              </div>
+            {:else}
+              <div class="card border border-base-300 bg-base-100">
+                <div class="card-body gap-2 p-4">
+                  <div class="flex items-center justify-between gap-2"><span class="badge badge-outline">Calibration</span><span class="badge badge-ghost">Skipped</span></div>
+                  <h3 class="card-title text-lg">No calibration needed</h3>
+                  <p class="text-sm text-base-content/70">This profile uses discrete labels, so collection can begin immediately.</p>
+                </div>
+              </div>
+            {/if}
+            <div class={['card border', proportional && !calibrationReady ? 'border-base-300 bg-base-100 opacity-60' : 'border-primary bg-primary/10']}>
+              <div class="card-body gap-2 p-4">
+                <div class="flex items-center justify-between gap-2">
+                  <span class="badge badge-primary badge-outline">Step {proportional ? 2 : 1}</span>
+                  <span class={['badge', proportional && !calibrationReady ? 'badge-ghost' : 'badge-info']}>{proportional && !calibrationReady ? 'Locked' : 'Next'}</span>
+                </div>
+                <h3 class="card-title text-lg">Collect training data</h3>
+                <p class="text-sm text-base-content/70">Follow the gesture prompts to create the authoritative training capture.</p>
+              </div>
+            </div>
+          </div>
+
           <div class="flex flex-wrap items-center justify-between gap-3">
             <label class="label cursor-pointer gap-3">
               <span class={['label-text', !autoMode && 'font-semibold']}>Manual</span>
-              <input type="checkbox" class="toggle toggle-primary" bind:checked={autoMode} disabled={sgtRunning} aria-label="Auto advance" />
+              <input type="checkbox" class="toggle toggle-primary" bind:checked={autoMode} disabled={sgtRunning || calibrationRunning} aria-label="Auto advance" />
               <span class={['label-text', autoMode && 'font-semibold']}>Auto</span>
             </label>
+            <span class="badge badge-outline">{proportional ? 'Proportional' : 'Discrete'} collection</span>
             <span class="badge badge-primary badge-outline">{awaiting ? 'Waiting for you' : (status.stage ?? ((sgtRunning || calibrationRunning) ? 'Running' : 'Ready'))}</span>
           </div>
 
@@ -453,8 +513,12 @@
                   <button class="btn btn-error btn-outline" onclick={() => void api.sgtCommand('abort')}>Abort</button>
                 {/if}
               {:else}
-                <button class="btn btn-secondary" onclick={startCalibration}>Calibrate subject</button>
-                <button class="btn btn-primary" onclick={startCollection}>Start collection</button>
+                {#if proportional && !calibrationReady}
+                  <button class="btn btn-primary" disabled={!deviceReady} onclick={startCalibration}>Start required calibration</button>
+                {:else}
+                  {#if proportional}<button class="btn btn-ghost" disabled={!deviceReady} onclick={startCalibration}>Recalibrate</button>{/if}
+                  <button class="btn btn-primary" disabled={!deviceReady} onclick={startCollection}>Start training data collection</button>
+                {/if}
               {/if}
             </div>
           </div>
@@ -517,7 +581,7 @@
             </details>
           {/if}
           {#if modelPath}<div class="alert alert-success"><span>Checkpoint ready: {modelPath}</span></div>{/if}
-          <div class="card-actions justify-end"><button class="btn" onclick={() => void api.request('/api/v1/training/cancel', { method: 'POST' })}>Cancel</button><button class="btn btn-secondary" onclick={() => void start('/api/v1/training/start', { subject, model, inputs: trainingInput ? [trainingInput] : [], discrete: false }, '/api/v1/training/status')}>Train model</button></div>
+          <div class="card-actions justify-end"><button class="btn" onclick={() => void api.request('/api/v1/training/cancel', { method: 'POST' })}>Cancel</button><button class="btn btn-secondary" onclick={() => void start('/api/v1/training/start', { subject, model, inputs: trainingInput ? [trainingInput] : [], discrete: !proportional }, '/api/v1/training/status')}>Train model</button></div>
         </StagePanel>
       {:else if stage === 'Validate'}
         <StagePanel title="Validate" description="Inspect class, confidence, activation, signal health, and end-to-end latency." active>

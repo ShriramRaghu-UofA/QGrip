@@ -27,6 +27,7 @@ HANDI_BRICK_REPOSITORY_URL = "https://github.com/YOUR-ORG/HANDI-BRICK-REPOSITORY
 
 class MotorRpc(Protocol):
     """Minimal Router transport contract needed by the safety controller."""
+
     def connect(self) -> None:
         """Open the Router transport."""
         ...

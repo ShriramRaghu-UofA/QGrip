@@ -98,6 +98,7 @@ class EMGPreprocessor(nn.Module):
 
 class BaseEMGClassifier(nn.Module):
     """Common preprocessor, metadata contract, and shape helpers for classifiers."""
+
     def __init__(
         self,
         *,
@@ -146,6 +147,7 @@ class BaseEMGClassifier(nn.Module):
 
 class TransformerEMGClassifier(BaseEMGClassifier):
     """Two-layer Transformer classifier over temporal EMG spectrogram tokens."""
+
     def __init__(
         self,
         *,
@@ -192,6 +194,7 @@ class TransformerEMGClassifier(BaseEMGClassifier):
 
 class CNN1DEMGClassifier(BaseEMGClassifier):
     """Temporal one-dimensional convolutional EMG classifier."""
+
     def __init__(self, *, hidden_channels: int = 64, dropout: float = 0, **config: Any) -> None:
         """Build temporal convolution blocks and classifier heads."""
         super().__init__(**config)
@@ -224,6 +227,7 @@ class CNN1DEMGClassifier(BaseEMGClassifier):
 
 class CNN2DEMGClassifier(BaseEMGClassifier):
     """Two-dimensional convolutional classifier over channel spectrogram images."""
+
     def __init__(
         self,
         *,
@@ -264,6 +268,7 @@ class CNN2DEMGClassifier(BaseEMGClassifier):
 
 class DenseEMGClassifier(BaseEMGClassifier):
     """Fully connected baseline classifier over flattened temporal tokens."""
+
     def __init__(self, *, hidden_dim: int = 256, dropout: float = 0, **config: Any) -> None:
         """Build the dense hidden layer and optional activation head."""
         super().__init__(**config)
