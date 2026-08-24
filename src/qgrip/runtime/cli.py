@@ -267,6 +267,7 @@ def dispatch(args: argparse.Namespace) -> int:
             host=profile.dashboard.host,
             port=profile.dashboard.port,
             workers=1,
+            timeout_graceful_shutdown=5,
         )
     elif args.command == "handi" and args.handi_command == "run":
         return _run_handi(args)
