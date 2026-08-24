@@ -14,6 +14,7 @@ from sifi_streamer.acquisition.devices import DeviceFactory, SignalChannelSpec, 
 from sifi_streamer.acquisition.health import HealthThresholds
 from sifi_streamer.acquisition.runtime import AcquisitionMonitor
 from sifi_streamer.sifi import BridgeTransport, SiFiBridgeDevice, SyntheticSiFiDevice
+from sifi_streamer.sifi.sensor_profile import EMG_IMU_PROFILE
 
 from qgrip.core.domain import (
     AcquisitionConfig,
@@ -209,6 +210,15 @@ def health_thresholds(config: AcquisitionConfig) -> HealthThresholds:
 def streamer_device_factory(config: DeviceConfig) -> DeviceFactory:
     """Return a picklable factory used only by a streamer-owned worker."""
     if config.kind == DeviceKind.SIFI:
+        if config.imu_sample_rate_hz is None:
+            raise DeviceError(
+                f"device.imu_sample_rate_hz must be set for {config.kind}"
+            )
+        profile = replace(
+            EMG_IMU_PROFILE,
+            emg=replace(EMG_IMU_PROFILE.emg, sample_rate_hz=round(config.sample_rate_hz)),
+            imu=replace(EMG_IMU_PROFILE.imu, sample_rate_hz=round(config.imu_sample_rate_hz)),
+        )
         return cast(
             DeviceFactory,
             partial(
@@ -216,6 +226,7 @@ def streamer_device_factory(config: DeviceConfig) -> DeviceFactory:
                 host=config.address or "127.0.0.1",
                 port=int(config.port or "5000"),
                 transport=BridgeTransport.TCP,
+                sensor_profile=profile,
             ),
         )
     if config.kind == DeviceKind.SYNTHETIC:

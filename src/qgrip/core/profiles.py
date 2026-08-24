@@ -18,6 +18,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, cast
 
+from sifi_streamer.sifi.sensor_profile import EmgConfiguration, ImuConfiguration
+
 from qgrip.core.domain import (
     DEFAULT_ACTIVATION_LEVELS,
     LED_MATRIX_PIXELS,
@@ -133,7 +135,11 @@ def _resolve(base: Path, value: object, name: str) -> Path:
 def _parse_device(raw: object) -> DeviceConfig:
     """Validate the ``device`` section and its transport-specific fields."""
     data = _object(raw, "device")
-    _only(data, {"kind", "sample_rate_hz", "channels", "address", "port", "seed"}, "device")
+    _only(
+        data,
+        {"kind", "sample_rate_hz", "channels", "address", "port", "seed", "imu_sample_rate_hz"},
+        "device",
+    )
     kind = _enum(data.get("kind", DeviceKind.SYNTHETIC), DeviceKind, "device.kind")
     address = _optional_string(data.get("address"), "device.address")
     port = _optional_string(data.get("port"), "device.port")
@@ -141,15 +147,35 @@ def _parse_device(raw: object) -> DeviceConfig:
         raise ValidationError("myo_ble cannot define device.port")
     if kind == "myo_dongle" and address is not None:
         raise ValidationError("myo_dongle cannot define device.address")
+    sample_rate_hz = _finite(
+        data.get("sample_rate_hz", 200), "device.sample_rate_hz", positive=True
+    )
+    if kind in {DeviceKind.MYO_BLE, DeviceKind.MYO_DONGLE} and sample_rate_hz != 200:
+        raise ValidationError(f"{kind} has a fixed device.sample_rate_hz of 200")
+    raw_imu = data.get("imu_sample_rate_hz")
+    if raw_imu is not None and kind != DeviceKind.SIFI:
+        raise ValidationError(f"device.imu_sample_rate_hz is not applicable for device.kind = {kind}")
+    imu_sample_rate_hz: float | None = None
+    if kind == DeviceKind.SIFI:
+        resolved_imu_rate = (
+            _finite(raw_imu, "device.imu_sample_rate_hz", positive=True)
+            if raw_imu is not None
+            else ImuConfiguration().sample_rate_hz
+        )
+        try:
+            EmgConfiguration(sample_rate_hz=round(sample_rate_hz))
+            ImuConfiguration(sample_rate_hz=round(resolved_imu_rate))
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
+        imu_sample_rate_hz = resolved_imu_rate
     return DeviceConfig(
         kind=kind,
-        sample_rate_hz=_finite(
-            data.get("sample_rate_hz", 200), "device.sample_rate_hz", positive=True
-        ),
+        sample_rate_hz=sample_rate_hz,
         channels=_integer(data.get("channels", 8), "device.channels", minimum=1),
         address=address,
         port=port,
         seed=_integer(data.get("seed", 7), "device.seed"),
+        imu_sample_rate_hz=imu_sample_rate_hz,
     )
 
 
@@ -691,9 +717,10 @@ def write_profile_atomic(profile: QGripProfile, output: str | Path) -> Path:
 def default_profile(kind: DeviceKind | str = DeviceKind.SYNTHETIC) -> dict[str, object]:
     """Return the complete editable schema-v1 document for a device kind.
 
-    Defaults target the synthetic source, use 200 Hz except for SiFi's 1600 Hz,
-    and select signed 8-bit normalization for Myo transports.  The mapping is
-    suitable for JSON serialization but has not been path-resolved or loaded.
+    Defaults target the synthetic source, use 200 Hz except for SiFi's 1000 Hz
+    EMG rate (with an explicit 100 Hz IMU rate), and select signed 8-bit
+    normalization for Myo transports.  The mapping is suitable for JSON
+    serialization but has not been path-resolved or loaded.
     """
     try:
         device_kind = DeviceKind(kind)
@@ -701,9 +728,11 @@ def default_profile(kind: DeviceKind | str = DeviceKind.SYNTHETIC) -> dict[str, 
         raise ValidationError(f"unsupported device kind: {kind}") from exc
     device: dict[str, object] = {
         "kind": device_kind,
-        "sample_rate_hz": 1600 if device_kind == DeviceKind.SIFI else 200,
+        "sample_rate_hz": 1000 if device_kind == DeviceKind.SIFI else 200,
         "channels": 8,
     }
+    if device_kind == DeviceKind.SIFI:
+        device["imu_sample_rate_hz"] = ImuConfiguration().sample_rate_hz
     return {
         "schema_version": 1,
         "data_root": "data",

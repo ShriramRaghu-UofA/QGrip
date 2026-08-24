@@ -4,6 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from sifi_streamer.sifi.sensor_profile import ImuConfiguration
+
 from qgrip.core.domain import NormalizationMode
 from qgrip.core.errors import ValidationError
 from qgrip.core.profiles import load_profile, write_profile_atomic
@@ -123,6 +125,82 @@ class ProfileTests(unittest.TestCase):
             path.write_text(json.dumps(document), encoding="utf-8")
             with self.assertRaisesRegex(ValidationError, "cannot define"):
                 load_profile(path)
+
+    def test_sifi_rejects_unsupported_emg_or_imu_rates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_profile(Path(directory))
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["device"] = {"kind": "sifi", "sample_rate_hz": 750, "channels": 8}
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaises(ValidationError):
+                load_profile(path)
+
+            document["device"] = {
+                "kind": "sifi",
+                "sample_rate_hz": 1000,
+                "imu_sample_rate_hz": 60,
+                "channels": 8,
+            }
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaises(ValidationError):
+                load_profile(path)
+
+    def test_imu_sample_rate_hz_is_rejected_for_non_sifi_kinds(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_profile(Path(directory))
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["device"] = {
+                "kind": "myo_ble",
+                "sample_rate_hz": 200,
+                "imu_sample_rate_hz": 100,
+                "channels": 8,
+            }
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaisesRegex(ValidationError, "not applicable"):
+                load_profile(path)
+
+    def test_myo_rejects_non_default_sample_rate_hz(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_profile(Path(directory))
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["device"] = {"kind": "myo_ble", "sample_rate_hz": 250, "channels": 8}
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaisesRegex(ValidationError, "fixed"):
+                load_profile(path)
+
+            document["device"] = {"kind": "myo_dongle", "sample_rate_hz": 100, "channels": 8}
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaisesRegex(ValidationError, "fixed"):
+                load_profile(path)
+
+    def test_sifi_device_config_resolves_explicit_and_default_imu_rate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_profile(Path(directory))
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["device"] = {
+                "kind": "sifi",
+                "sample_rate_hz": 1000,
+                "imu_sample_rate_hz": 100,
+                "channels": 8,
+            }
+            path.write_text(json.dumps(document), encoding="utf-8")
+            device = load_profile(path).device
+            self.assertEqual(device.sample_rate_hz, 1000)
+            self.assertEqual(device.imu_sample_rate_hz, 100)
+
+            document["device"] = {"kind": "sifi", "sample_rate_hz": 1000, "channels": 8}
+            path.write_text(json.dumps(document), encoding="utf-8")
+            device = load_profile(path).device
+            self.assertEqual(device.imu_sample_rate_hz, ImuConfiguration().sample_rate_hz)
+
+    def test_myo_device_config_leaves_imu_sample_rate_hz_none(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_profile(Path(directory))
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["device"] = {"kind": "myo_ble", "sample_rate_hz": 200, "channels": 8}
+            path.write_text(json.dumps(document), encoding="utf-8")
+            device = load_profile(path).device
+            self.assertIsNone(device.imu_sample_rate_hz)
 
     def test_rest_gesture_is_required(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

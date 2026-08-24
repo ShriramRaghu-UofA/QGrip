@@ -8,8 +8,10 @@ from qgrip.capture.streaming import (
     MyoAcquisitionDevice,
     MyoPacket,
     PredictionDebouncer,
+    streamer_device_factory,
 )
 from qgrip.core.domain import DeviceConfig, DeviceKind, Prediction
+from qgrip.core.errors import DeviceError
 
 
 class _Reader:
@@ -44,6 +46,23 @@ class LiveWindowTests(unittest.TestCase):
         self.assertEqual(device.streams[0].nominal_rate_hz, 250)
         self.assertEqual(device.device_info["sample_rate_hz"], 250)
         self.assertEqual(MyoPacket(0, (0.0,) * 8, 250).reported_rate_hz, 250)
+
+    def test_sifi_device_factory_requests_the_configured_emg_and_imu_rates(self) -> None:
+        config = DeviceConfig(
+            kind=DeviceKind.SIFI, sample_rate_hz=1000, imu_sample_rate_hz=100
+        )
+        factory = streamer_device_factory(config)
+        profile = factory.keywords["sensor_profile"]
+        self.assertEqual(profile.emg.sample_rate_hz, 1000)
+        self.assertTrue(profile.emg.enabled)
+        self.assertEqual(profile.imu.sample_rate_hz, 100)
+        self.assertTrue(profile.imu.enabled)
+
+    def test_sifi_device_factory_rejects_missing_imu_sample_rate(self) -> None:
+        config = DeviceConfig(kind=DeviceKind.SIFI, sample_rate_hz=1000, channels=8)
+        with self.assertRaises(DeviceError) as ctx:
+            streamer_device_factory(config)
+        self.assertIn("imu_sample_rate_hz", str(ctx.exception))
 
 
 class PredictionDebouncerTests(unittest.TestCase):

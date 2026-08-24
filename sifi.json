@@ -4,7 +4,8 @@
   "assets_root": "assets/images",
   "device": {
     "kind": "sifi",
-    "sample_rate_hz": 1600,
+    "sample_rate_hz": 1000,
+    "imu_sample_rate_hz": 100,
     "channels": 8
   },
   "acquisition": {

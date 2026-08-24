@@ -68,7 +68,11 @@ other than `1`.
 The sections have distinct owners:
 
 - `device` selects SiFi, Myo BLE, Myo dongle, or synthetic acquisition and declares the
-  nominal channel count and sample rate.
+  nominal channel count and sample rate. For SiFi, `sample_rate_hz` and `imu_sample_rate_hz`
+  select the bridge's onboard EMG and IMU rates and are validated by `sifi-streamer` itself
+  (both sensors are enabled, mirroring Myo's always-on, currently unconsumed IMU stream).
+  Myo BLE and Myo dongle have a hardware-fixed `sample_rate_hz` of 200Hz and no
+  `imu_sample_rate_hz` concept; either field diverging from that is rejected.
 - `acquisition` maps to public `sifi-streamer` configuration and health thresholds.
 - `sgt` defines gesture order, trials, preparation/practice timing, and UI update cadence.
 - `model` selects one architecture and only its allowed architecture parameters.

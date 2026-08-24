@@ -82,7 +82,13 @@ class DeviceConfig:
     """Physical or synthetic EMG source selected by a profile.
 
     ``kind`` chooses the transport. ``sample_rate_hz`` and ``channels`` are the
-    nominal stream identity and must agree with datasets and checkpoints.
+    nominal stream identity and must agree with datasets and checkpoints. For
+    ``kind == DeviceKind.SIFI``, ``sample_rate_hz`` selects the bridge's onboard
+    EMG sample rate and ``imu_sample_rate_hz`` selects its onboard IMU sample
+    rate, both validated against sifi-streamer's own supported values. For
+    ``{DeviceKind.MYO_BLE, DeviceKind.MYO_DONGLE}``, ``sample_rate_hz`` is fixed
+    at 200Hz (not configurable) and ``imu_sample_rate_hz`` must stay ``None``
+    since Myo has no configurable/consumed IMU rate concept.
     ``address`` is used by SiFi and Myo BLE; ``port`` is used by SiFi and the
     Myo dongle. ``seed`` makes synthetic acquisition reproducible.
     """
@@ -93,6 +99,7 @@ class DeviceConfig:
     address: str | None = None
     port: str | None = None
     seed: int = 7
+    imu_sample_rate_hz: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
