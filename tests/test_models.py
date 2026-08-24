@@ -1,13 +1,16 @@
 import tempfile
 import unittest
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import torch
 
 from qgrip.ml.models import (
     MODEL_NAMES,
+    CNN2DEMGClassifier,
     ONNXEMGClassifier,
+    TransformerEMGClassifier,
     create_model,
     export_model_to_onnx,
     load_model_checkpoint,
@@ -35,16 +38,60 @@ class ModelTests(unittest.TestCase):
                 self.assertTrue(torch.all((activation >= 0) & (activation <= 1)))
                 (logits.mean() + activation.mean()).backward()
 
+    def test_transformer_classifies_from_latest_contextualized_token(self) -> None:
+        model = cast(
+            TransformerEMGClassifier,
+            create_model(
+                "transformer",
+                n_classes=3,
+                window_size=8,
+                n_channels=1,
+                n_fft=4,
+                hop_length=2,
+                normalization="dataset_standardize",
+                predict_activation=False,
+                d_model=3,
+                nhead=1,
+            ),
+        )
+        encoded = torch.tensor([[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]])
+        classifier_inputs: list[torch.Tensor] = []
+
+        def replace_encoder_output(
+            _module: torch.nn.Module,
+            inputs: tuple[torch.Tensor, ...],
+            _output: torch.Tensor,
+        ) -> torch.Tensor:
+            return encoded.expand(inputs[0].shape[0], -1, -1)
+
+        def record_classifier_input(
+            _module: torch.nn.Module, inputs: tuple[torch.Tensor, ...]
+        ) -> None:
+            classifier_inputs.append(inputs[0].detach())
+
+        encoder_hook = model.transformer.register_forward_hook(replace_encoder_output)
+        classifier_hook = model.classifier.register_forward_pre_hook(record_classifier_input)
+
+        model(torch.zeros(2, 8, 1))
+
+        encoder_hook.remove()
+        classifier_hook.remove()
+        self.assertEqual(len(classifier_inputs), 1)
+        self.assertTrue(torch.equal(classifier_inputs[0], encoded[:, -1].expand(2, -1)))
+
     def test_cnn2d_uses_adaptive_max_pooling(self) -> None:
-        model = create_model(
-            "cnn2d",
-            n_classes=3,
-            window_size=32,
-            n_channels=8,
-            n_fft=16,
-            hop_length=4,
-            normalization="dataset_standardize",
-            predict_activation=False,
+        model = cast(
+            CNN2DEMGClassifier,
+            create_model(
+                "cnn2d",
+                n_classes=3,
+                window_size=32,
+                n_channels=8,
+                n_fft=16,
+                hop_length=4,
+                normalization="dataset_standardize",
+                predict_activation=False,
+            ),
         )
 
         self.assertIsInstance(model.classifier[0], torch.nn.AdaptiveMaxPool2d)
@@ -85,26 +132,28 @@ class ModelTests(unittest.TestCase):
                         load_model_checkpoint(path)
 
     def test_builtin_stft_exports_and_runs_in_onnx_runtime(self) -> None:
-        model = create_model(
-            "dense",
-            n_classes=3,
-            window_size=16,
-            n_channels=8,
-            n_fft=8,
-            hop_length=2,
-            normalization="window_zscore",
-            predict_activation=True,
-        )
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "model.onnx"
-            export_model_to_onnx(model, path)
-            logits, activation = ONNXEMGClassifier(path).predict(
-                np.zeros((1, 16, 8), dtype=np.float32)
-            )
-            self.assertEqual(logits.shape, (1, 3))
-            self.assertIsNotNone(activation)
-            assert activation is not None
-            self.assertEqual(activation.shape, (1,))
+            for name in ("dense", "transformer"):
+                with self.subTest(model=name):
+                    model = create_model(
+                        name,
+                        n_classes=3,
+                        window_size=16,
+                        n_channels=8,
+                        n_fft=8,
+                        hop_length=2,
+                        normalization="window_zscore",
+                        predict_activation=True,
+                    )
+                    path = Path(directory) / f"{name}.onnx"
+                    export_model_to_onnx(model, path)
+                    logits, activation = ONNXEMGClassifier(path).predict(
+                        np.zeros((1, 16, 8), dtype=np.float32)
+                    )
+                    self.assertEqual(logits.shape, (1, 3))
+                    self.assertIsNotNone(activation)
+                    assert activation is not None
+                    self.assertEqual(activation.shape, (1,))
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 import unittest
+from functools import partial
 
 import numpy as np
 from sifi_streamer.acquisition.reader import SignalWindow
@@ -48,10 +49,9 @@ class LiveWindowTests(unittest.TestCase):
         self.assertEqual(MyoPacket(0, (0.0,) * 8, 250).reported_rate_hz, 250)
 
     def test_sifi_device_factory_requests_the_configured_emg_and_imu_rates(self) -> None:
-        config = DeviceConfig(
-            kind=DeviceKind.SIFI, sample_rate_hz=1000, imu_sample_rate_hz=100
-        )
+        config = DeviceConfig(kind=DeviceKind.SIFI, sample_rate_hz=1000, imu_sample_rate_hz=100)
         factory = streamer_device_factory(config)
+        assert isinstance(factory, partial)
         profile = factory.keywords["sensor_profile"]
         self.assertEqual(profile.emg.sample_rate_hz, 1000)
         self.assertTrue(profile.emg.enabled)

@@ -33,10 +33,26 @@ class ProfileTests(unittest.TestCase):
             profile = load_profile(write_profile(Path(directory)))
             self.assertEqual(profile.training.dataset_stride_seconds, 0.005)
             self.assertEqual(profile.training.training_window_seconds, 0.05)
+            self.assertEqual(profile.training.stft_window_seconds, 0.04)
+            self.assertEqual(profile.training.stft_hop_seconds, 0.01)
             self.assertEqual(profile.training.activation_energy_window_seconds, 0.05)
             self.assertEqual(profile.training.activation_reference_quantile, 0.9)
             self.assertEqual(profile.training.activation_smoothing_threshold, 0.25)
             self.assertEqual(profile.training.epochs, 1)
+
+    def test_stft_timing_must_fit_and_align_with_model_window(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_profile(Path(directory))
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["training"]["stft_window_seconds"] = 0.06
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaisesRegex(ValidationError, "model input window"):
+                load_profile(path)
+
+            document["training"]["stft_window_seconds"] = 0.035
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaisesRegex(ValidationError, "do not align"):
+                load_profile(path)
 
     def test_nested_acquisition_and_model_configuration_is_loaded(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -115,7 +131,9 @@ class ProfileTests(unittest.TestCase):
 
             document["handi"]["grips"][0]["led_frame"] = None
             path.write_text(json.dumps(document), encoding="utf-8")
-            self.assertIsNone(load_profile(path).handi.grips[0].led_frame)
+            handi = load_profile(path).handi
+            assert handi is not None
+            self.assertIsNone(handi.grips[0].led_frame)
 
     def test_incompatible_myo_options_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

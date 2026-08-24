@@ -191,8 +191,8 @@ unrelated gestures. Smooth L1 loss for the activation head is added using
 `activation_loss_weight`. Discrete training uses hard class targets and no activation
 loss; inference reports activation `1.0` for that model shape.
 
-All presets share `EMGPreprocessor`, so normalization and `torch.stft` are part of the
-trained graph and ONNX export. `dataset_standardize` stores training-only channel statistics;
+All presets share `EMGPreprocessor`, so normalization and the windowed-DFT transform are part
+of the trained graph and ONNX export. `dataset_standardize` stores training-only channel statistics;
 `signed_8bit` scales Myo values by 128; `window_zscore` normalizes each input window.
 
 ## Model artifact contract

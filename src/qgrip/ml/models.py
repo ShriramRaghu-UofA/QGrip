@@ -167,7 +167,7 @@ class BaseEMGClassifier(nn.Module):
 
 
 class TransformerEMGClassifier(BaseEMGClassifier):
-    """Two-layer Transformer classifier over temporal EMG spectrogram tokens."""
+    """Classify from the latest token after contextualizing it over EMG history."""
 
     def __init__(
         self,
@@ -206,7 +206,7 @@ class TransformerEMGClassifier(BaseEMGClassifier):
     def forward(self, values: torch.Tensor) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Return class logits and, when enabled, a sigmoid activation estimate."""
         tokens = self.input_proj(self.preprocessor(values)) + self.pos_embed
-        features = self.transformer(tokens).mean(dim=1)
+        features = self.transformer(tokens)[:, -1]
         logits = self.classifier(features)
         if self.activation_head is None:
             return logits
@@ -268,7 +268,6 @@ class CNN2DEMGClassifier(BaseEMGClassifier):
             nn.ReLU(),
         )
 
-        
         self.classifier = nn.Sequential(
             nn.AdaptiveMaxPool2d(1),
             nn.Flatten(),

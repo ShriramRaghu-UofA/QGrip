@@ -2,11 +2,43 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
 DEFAULT_ACTIVATION_LEVELS: tuple[float, ...] = (0.25, 0.5, 0.75, 1.0)
+
+
+def resolve_stft_dimensions(
+    sample_rate_hz: float,
+    model_window_seconds: float,
+    stft_window_seconds: float,
+    stft_hop_seconds: float,
+) -> tuple[int, int, int]:
+    """Resolve time-based STFT settings to an exactly aligned sample geometry."""
+    if sample_rate_hz <= 0:
+        raise ValueError("sample rate must be positive")
+    if model_window_seconds <= 0 or stft_window_seconds <= 0 or stft_hop_seconds <= 0:
+        raise ValueError("model and STFT timing values must be positive")
+    if stft_window_seconds > model_window_seconds:
+        raise ValueError("STFT analysis window must be no longer than the model input window")
+    window_size = max(8, round(sample_rate_hz * model_window_seconds))
+    n_fft = math.floor(sample_rate_hz * stft_window_seconds)
+    if n_fft < 4:
+        raise ValueError("STFT analysis window must contain at least four samples")
+    if n_fft > window_size:
+        raise ValueError("STFT analysis window must fit within the model input window")
+    hop_length = max(1, round(sample_rate_hz * stft_hop_seconds))
+    if hop_length > n_fft:
+        raise ValueError("STFT hop must be no larger than its analysis window")
+    if (window_size - n_fft) % hop_length:
+        raise ValueError(
+            "STFT window and hop do not align with the model input window; "
+            "choose compatible training timing values"
+        )
+    return window_size, n_fft, hop_length
+
 
 #: UNO Q LED matrix geometry (8 rows x 13 cols) — see GripPreset.led_frame.
 LED_MATRIX_ROWS = 8
@@ -188,9 +220,10 @@ class TrainingConfig:
     """Windowing, optimization, activation-target, and export settings.
 
     Training uses windows of ``training_window_seconds`` separated by
-    ``dataset_stride_seconds``. STFT settings are optional; omitted values use
-    the model's defaults. The activation fields calibrate proportional targets
-    from causal EMG energy, while ``normalization`` becomes model state.
+    ``dataset_stride_seconds``. STFT analysis-window and hop durations resolve
+    to samples at the configured device rate. The activation fields calibrate
+    proportional targets from causal EMG energy, while ``normalization`` becomes
+    model state.
     """
 
     epochs: int = 30
@@ -199,8 +232,8 @@ class TrainingConfig:
     validation_fraction: float = 0.2
     training_window_seconds: float = 1.0
     dataset_stride_seconds: float = 0.005
-    stft_n_fft: int | None = None
-    stft_hop_samples: int | None = None
+    stft_window_seconds: float = 0.1
+    stft_hop_seconds: float = 0.02
     activation_energy_window_seconds: float = 0.1
     activation_reference_quantile: float = 0.9
     activation_smoothing_threshold: float = 0.25

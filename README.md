@@ -264,22 +264,28 @@ checkpoint is the usual input. A `.onnx` path is also accepted, but its matching
 
 Training is implemented directly in QGrip. The `transformer`, `cnn1d`, `cnn2d`,
 and `dense` presets share an `EMGPreprocessor` module that owns normalization and
-`torch.stft`. Proportional models learn an activation head; discrete models expose
+the windowed-DFT transform. Proportional models learn an activation head; discrete models expose
 the same inference contract with activation fixed at `1.0`. Backend selection follows
 the profile policy described above.
 No scripts or Python modules are loaded from the reference acquisition repository at
 runtime.
 
-Packaged templates for `synthetic`, `sifi`, `myo_ble`, and `myo_dongle` live in
-`src/qgrip/profile_templates`. Myo support uses the attributed PyoMyo source vendored
-from the reference acquisition repository; PyoMyo itself is not installed.
+Myo support uses the attributed PyoMyo source vendored from the reference acquisition
+repository; PyoMyo itself is not installed.
 
 ## Profiles
 
 Profiles are the editable configuration boundary for QGrip. They compose device,
 acquisition, SGT, model, training, inference, dashboard, and optional Handi settings;
-the CLI, dashboard, and standalone Handi runtime use the same loaded profile. Create
-one with `qgrip profile create`, then edit it before running a workflow.
+the CLI, dashboard, and standalone Handi runtime use the same loaded profile. QGrip
+does not select or copy an implicit profile; create one explicitly, then edit it before
+running a workflow:
+
+```powershell
+qgrip profile create profile.json --device synthetic
+```
+
+Replace `synthetic` with `sifi`, `myo_ble`, or `myo_dongle` as appropriate.
 Each service reads only its own nested section: SGT reads `sgt` and `acquisition`,
 training reads `training` and `model`, and live inference/Handi read `inference` and
 `acquisition` alongside the device and model artifacts.
@@ -289,11 +295,10 @@ directory. `schema_version` is mandatory and must be exactly `1`; unknown keys a
 unsupported enum values are rejected. `rest` must appear among at least two unique
 `sgt.gestures`.
 
-The `training` section controls every training parameter. Its three timing settings
-are deliberately independent: `dataset_stride_seconds` controls overlap between
-training examples, `stft_hop_samples` controls STFT frame overlap, and
-`inference_period_seconds` in the separate `inference` section controls live output
-rate.
+The `training` section controls every training parameter. Its timing settings are
+deliberately independent: `dataset_stride_seconds` controls overlap between training
+examples, `stft_window_seconds` and `stft_hop_seconds` define the spectral frames, and
+`inference_period_seconds` in the separate `inference` section controls live output rate.
 
 ```json
 {
@@ -304,8 +309,8 @@ rate.
     "validation_fraction": 0.2,
     "training_window_seconds": 1.0,
     "dataset_stride_seconds": 0.005,
-    "stft_n_fft": null,
-    "stft_hop_samples": null,
+    "stft_window_seconds": 0.1,
+    "stft_hop_seconds": 0.02,
     "activation_energy_window_seconds": 0.1,
     "activation_reference_quantile": 0.9,
     "activation_smoothing_threshold": 0.25,
@@ -318,8 +323,8 @@ rate.
 }
 ```
 
-Set `stft_n_fft` and `stft_hop_samples` together to override QGrip's sample-rate
-dependent STFT defaults; use `null` for automatic selection. `normalization` is
+The default 100 ms STFT analysis window and 20 ms hop resolve to device-rate sample
+counts and align exactly with the default one-second model input window. `normalization` is
 `signed_8bit` for Myo profiles and `dataset_standardize` for SiFi and other devices;
 the latter fits statistics from the training split for proportional and discrete models.
 Profile validation rejects unknown keys and invalid ranges before capture, training,

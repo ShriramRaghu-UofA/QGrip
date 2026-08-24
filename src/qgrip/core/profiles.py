@@ -39,6 +39,7 @@ from qgrip.core.domain import (
     QGripProfile,
     SGTConfig,
     TrainingConfig,
+    resolve_stft_dimensions,
 )
 from qgrip.core.errors import ValidationError
 
@@ -154,7 +155,9 @@ def _parse_device(raw: object) -> DeviceConfig:
         raise ValidationError(f"{kind} has a fixed device.sample_rate_hz of 200")
     raw_imu = data.get("imu_sample_rate_hz")
     if raw_imu is not None and kind != DeviceKind.SIFI:
-        raise ValidationError(f"device.imu_sample_rate_hz is not applicable for device.kind = {kind}")
+        raise ValidationError(
+            f"device.imu_sample_rate_hz is not applicable for device.kind = {kind}"
+        )
     imu_sample_rate_hz: float | None = None
     if kind == DeviceKind.SIFI:
         resolved_imu_rate = (
@@ -395,8 +398,8 @@ def _parse_training(raw: object, device: DeviceConfig) -> TrainingConfig:
             "validation_fraction",
             "training_window_seconds",
             "dataset_stride_seconds",
-            "stft_n_fft",
-            "stft_hop_samples",
+            "stft_window_seconds",
+            "stft_hop_seconds",
             "activation_energy_window_seconds",
             "activation_reference_quantile",
             "activation_smoothing_threshold",
@@ -413,13 +416,19 @@ def _parse_training(raw: object, device: DeviceConfig) -> TrainingConfig:
     )
     if validation_fraction >= 1:
         raise ValidationError("training.validation_fraction must be less than 1")
-    n_fft = _optional_integer(data.get("stft_n_fft"), "training.stft_n_fft", minimum=4)
-    hop_samples = _optional_integer(
-        data.get("stft_hop_samples"), "training.stft_hop_samples", minimum=1
+    stft_window_seconds = _finite(
+        data.get("stft_window_seconds", 0.1),
+        "training.stft_window_seconds",
+        positive=True,
     )
-    if n_fft is not None and hop_samples is not None and hop_samples > n_fft:
+    stft_hop_seconds = _finite(
+        data.get("stft_hop_seconds", 0.02),
+        "training.stft_hop_seconds",
+        positive=True,
+    )
+    if stft_hop_seconds > stft_window_seconds:
         raise ValidationError(
-            "training.stft_hop_samples must be no larger than training.stft_n_fft"
+            "training.stft_hop_seconds must be no larger than training.stft_window_seconds"
         )
     activation_reference_quantile = _finite(
         data.get("activation_reference_quantile", 0.9),
@@ -450,6 +459,15 @@ def _parse_training(raw: object, device: DeviceConfig) -> TrainingConfig:
             "training.activation_energy_window_seconds must be no larger than "
             "training.training_window_seconds"
         )
+    try:
+        resolve_stft_dimensions(
+            device.sample_rate_hz,
+            training_window_seconds,
+            stft_window_seconds,
+            stft_hop_seconds,
+        )
+    except ValueError as exc:
+        raise ValidationError(str(exc)) from exc
     return TrainingConfig(
         epochs=_integer(data.get("epochs", 30), "training.epochs", minimum=1),
         batch_size=_integer(data.get("batch_size", 128), "training.batch_size", minimum=1),
@@ -463,8 +481,8 @@ def _parse_training(raw: object, device: DeviceConfig) -> TrainingConfig:
             "training.dataset_stride_seconds",
             positive=True,
         ),
-        stft_n_fft=n_fft,
-        stft_hop_samples=hop_samples,
+        stft_window_seconds=stft_window_seconds,
+        stft_hop_seconds=stft_hop_seconds,
         activation_energy_window_seconds=activation_energy_window_seconds,
         activation_reference_quantile=activation_reference_quantile,
         activation_smoothing_threshold=activation_smoothing_threshold,
@@ -785,8 +803,8 @@ def default_profile(kind: DeviceKind | str = DeviceKind.SYNTHETIC) -> dict[str, 
             "validation_fraction": 0.2,
             "training_window_seconds": 1.0,
             "dataset_stride_seconds": 0.005,
-            "stft_n_fft": None,
-            "stft_hop_samples": None,
+            "stft_window_seconds": 0.1,
+            "stft_hop_seconds": 0.02,
             "activation_energy_window_seconds": 0.1,
             "activation_reference_quantile": 0.9,
             "activation_smoothing_threshold": 0.25,

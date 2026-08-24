@@ -34,6 +34,7 @@ from qgrip.core.domain import (
     TrainingConfig,
     TrainingRequest,
     TrainingSummary,
+    resolve_stft_dimensions,
 )
 from qgrip.core.errors import ArtifactError
 from qgrip.ml.models import (
@@ -456,21 +457,19 @@ class TorchTrainingService:
                 raise ArtifactError(f"training input is not Parquet: {path}")
             resolved.append(path)
         sample_rate = request.profile.device.sample_rate_hz
-        window_size = max(8, round(sample_rate * self.options.training_window_seconds))
+        try:
+            window_size, n_fft, stft_hop_samples = resolve_stft_dimensions(
+                sample_rate,
+                self.options.training_window_seconds,
+                self.options.stft_window_seconds,
+                self.options.stft_hop_seconds,
+            )
+        except ValueError as exc:
+            raise ArtifactError(str(exc)) from exc
         dataset_stride = max(1, round(sample_rate * self.options.dataset_stride_seconds))
         activation_window_size = max(
             1, round(sample_rate * self.options.activation_energy_window_seconds)
         )
-        n_fft_limit = 64 if sample_rate >= 400 else 32
-        default_n_fft = 2 ** math.floor(math.log2(min(n_fft_limit, window_size)))
-        n_fft = self.options.stft_n_fft or max(4, default_n_fft)
-        if not 4 <= n_fft <= window_size:
-            raise ArtifactError(
-                "stft_n_fft must be at least 4 and no larger than the training window"
-            )
-        stft_hop_samples = self.options.stft_hop_samples or max(1, n_fft // 4)
-        if not 1 <= stft_hop_samples <= n_fft:
-            raise ArtifactError("stft_hop_samples must be between 1 and stft_n_fft")
         dataset = EMGWindowDataset(
             tuple(resolved),
             labels=request.profile.sgt.gestures,
