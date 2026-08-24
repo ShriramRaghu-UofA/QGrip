@@ -20,6 +20,7 @@ from qgrip.capture.assets import (
     LIBEMG_CITATION_URL,
     download_assets,
 )
+from qgrip.capture.rpc import MessagePackRpcClient
 from qgrip.capture.streaming import LiveEMGSession, PredictionDebouncer, check_streamer_device
 from qgrip.core.domain import SGTRequest, TrainingRequest
 from qgrip.core.errors import QGripError, ValidationError
@@ -29,7 +30,7 @@ from qgrip.core.profiles import (
     profile_document,
     write_profile_atomic,
 )
-from qgrip.runtime.handi import HandiRuntime
+from qgrip.runtime.handi import HandiRuntime, run_interactive
 from qgrip.runtime.workflows import (
     CalibrationService,
     InferenceService,
@@ -116,6 +117,12 @@ def build_parser() -> argparse.ArgumentParser:
     _profile_argument(calibrate)
     calibrate.add_argument("--output", type=Path, required=True)
     calibrate.add_argument("--controller")
+    calibrate.add_argument(
+        "--interactive",
+        action="store_true",
+        help="launch a curses wizard to jog joints to their extend/flex endpoints "
+        "and edit grip presets by hand, instead of just re-validating the profile",
+    )
     return parser
 
 
@@ -132,7 +139,7 @@ def _run_handi(args: argparse.Namespace) -> int:
         runtime.model.labels,
         dict(config.gesture_mapping),
         config.joints,
-        {item.name: item.start for item in config.joints},
+        {item.name: item.minimum for item in config.joints},
     )
     for event in (signal.SIGINT, signal.SIGTERM):
         signal.signal(event, lambda _signum, _frame: runtime.stop())
@@ -253,7 +260,11 @@ def dispatch(args: argparse.Namespace) -> int:
     elif args.command == "handi" and args.handi_command == "calibrate":
         if profile.handi is None:
             raise ValidationError("profile has no Handi configuration")
-        print(write_profile_atomic(profile, args.output))
+        if args.interactive:
+            rpc = MessagePackRpcClient(profile.handi.rpc_socket, profile.handi.rpc_timeout_seconds)
+            run_interactive(profile, rpc, args.output)
+        else:
+            print(write_profile_atomic(profile, args.output))
     else:
         print(discover_artifacts(profile))
     return 0

@@ -75,14 +75,8 @@ def write_profile(root: Path, *, handi: bool = False) -> Path:
             "rpc_timeout_seconds": 0.1,
             "step": 5,
             "joints": [
-                {"name": "thumb", "minimum": 10, "maximum": 20, "start": 15, "open_position": 10},
-                {
-                    "name": "index",
-                    "minimum": 100,
-                    "maximum": 200,
-                    "start": 150,
-                    "open_position": 100,
-                },
+                {"name": "thumb", "minimum": 10, "maximum": 20},
+                {"name": "index", "minimum": 100, "maximum": 200},
             ],
             "grips": [
                 {

@@ -580,20 +580,12 @@ def _parse_handi(raw: object | None) -> HandiConfig | None:
     joints: list[JointLimit] = []
     for item in cast(list[object], data.get("joints", [])):
         joint = _object(item, "joint")
-        _only(joint, {"name", "minimum", "maximum", "start", "open_position"}, "joint")
+        _only(joint, {"name", "minimum", "maximum"}, "joint")
         minimum = _finite(joint.get("minimum"), "joint.minimum")
         maximum = _finite(joint.get("maximum"), "joint.maximum")
-        start = _finite(joint.get("start"), "joint.start")
-        open_position = _finite(joint.get("open_position"), "joint.open_position")
-        if minimum >= maximum or not minimum <= start <= maximum:
-            raise ValidationError("joint requires minimum < maximum and an in-range start")
-        if not minimum <= open_position <= maximum:
-            raise ValidationError("joint.open_position must be within minimum/maximum")
-        joints.append(
-            JointLimit(
-                _string(joint.get("name"), "joint.name"), minimum, maximum, start, open_position
-            )
-        )
+        if minimum >= maximum:
+            raise ValidationError("joint requires minimum < maximum")
+        joints.append(JointLimit(_string(joint.get("name"), "joint.name"), minimum, maximum))
     grips: list[GripPreset] = []
     for item in cast(list[object], data.get("grips", [])):
         grip = _object(item, "grip")
@@ -834,48 +826,12 @@ def default_profile(kind: DeviceKind | str = DeviceKind.SYNTHETIC) -> dict[str, 
             "step": 60,
             "openness_step": 0.05,
             "joints": [
-                {
-                    "name": "thumb_rotate",
-                    "minimum": 2244,
-                    "maximum": 2840,
-                    "start": 2244,
-                    "open_position": 2244,
-                },
-                {
-                    "name": "thumb_flex",
-                    "minimum": 2100,
-                    "maximum": 2944,
-                    "start": 2100,
-                    "open_position": 2100,
-                },
-                {
-                    "name": "index",
-                    "minimum": 2180,
-                    "maximum": 3764,
-                    "start": 2180,
-                    "open_position": 2180,
-                },
-                {
-                    "name": "middle",
-                    "minimum": 2173,
-                    "maximum": 3841,
-                    "start": 2173,
-                    "open_position": 2173,
-                },
-                {
-                    "name": "ring",
-                    "minimum": 2103,
-                    "maximum": 3783,
-                    "start": 2103,
-                    "open_position": 2103,
-                },
-                {
-                    "name": "baby",
-                    "minimum": 2091,
-                    "maximum": 3706,
-                    "start": 2091,
-                    "open_position": 2091,
-                },
+                {"name": "thumb_rotate", "minimum": 2244, "maximum": 2840},
+                {"name": "thumb_flex", "minimum": 2100, "maximum": 2944},
+                {"name": "index", "minimum": 2180, "maximum": 3764},
+                {"name": "middle", "minimum": 2173, "maximum": 3841},
+                {"name": "ring", "minimum": 2103, "maximum": 3783},
+                {"name": "baby", "minimum": 2091, "maximum": 3706},
             ],
             "grips": [
                 {

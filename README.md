@@ -409,12 +409,34 @@ RPC connection, start pose, movement, and shutdown. The App Lab Brick/sketch liv
 separately; configure its repository in
 `qgrip.runtime.handi.HANDI_BRICK_REPOSITORY_URL` when published.
 
-Calibration persistence is not implemented yet.
-`qgrip handi calibrate --output <path>` currently writes an atomically validated copy of
-the loaded profile; it does not query the controller or replace joint limits from hardware.
+`qgrip handi calibrate --profile <path> --output <path>` writes an atomically validated
+copy of the loaded profile. Add `--interactive` to instead launch a curses wizard that
+connects to the Router, jogs joints or grip-preset positions by hand, and writes the
+discovered values back into `--output` on exit:
 
-An enabled `handi` profile must define at least one joint with `minimum < maximum` and
-an in-range `start`. Gesture mappings resolve either to incremental `open`/`close`
+```powershell
+uv run qgrip handi calibrate --profile handi.json --output handi.json --interactive
+```
+
+The wizard has two modes, picked from a top-level menu:
+
+- **Find joint range** — pick a joint, then jog it with the arrow keys (Shift+arrow for
+  a bigger step) to its EXTEND endpoint and press `s` to save, then repeat for FLEX.
+  EXTEND becomes the joint's `minimum` (also its open/start position) and FLEX becomes
+  its `maximum`; `d` discards a jog and returns to where it started. This mode moves the
+  joint directly and unclamped, since it exists to discover the range in the first
+  place — every other joint is retracted to its own known `minimum` first so it stays
+  out of the way.
+- **Edit grip presets** — pick a preset (sent to the hand via the same clamped
+  `HandController` the runtime uses), then pick a joint within it and jog its position,
+  `s` to save into that preset or `d` to discard.
+
+`q` (or Ctrl-C) backs out one menu level; from the top level it exits and persists.
+
+An enabled `handi` profile must define at least one joint with `minimum < maximum`.
+`minimum` doubles as that joint's startup position (sent once at launch) and its
+"fully open" reference for open/close blending — there is no separate `start` or
+`open_position` field. Gesture mappings resolve either to incremental `open`/`close`
 movement or to a named grip preset. Unmapped gestures update observed prediction state
 but do not move the hand. The runtime validates checkpoint/device channels and sample
 rate before applying the configured start pose.

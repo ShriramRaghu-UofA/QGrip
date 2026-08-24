@@ -28,8 +28,8 @@ class HandControllerTests(unittest.TestCase):
             enabled=True,
             step=10,
             joints=(
-                JointLimit("thumb", 10, 20, 15, open_position=10),
-                JointLimit("index", 100, 200, 150, open_position=100),
+                JointLimit("thumb", 10, 20),
+                JointLimit("index", 100, 200),
             ),
         )
         self.controller = HandController(self.config, self.rpc)
@@ -38,7 +38,7 @@ class HandControllerTests(unittest.TestCase):
 
     def test_all_positions_are_batched_and_clamped(self) -> None:
         self.assertEqual(self.controller.move("thumb", 999), 20)
-        self.assertEqual(self.rpc.calls[-1], ("set_positions", ([20, 150],)))
+        self.assertEqual(self.rpc.calls[-1], ("set_positions", ([20, 100],)))
 
     def test_open_close_is_noop_without_an_active_grip(self) -> None:
         # No grip has been applied yet, so there's no preset target to blend
@@ -60,7 +60,7 @@ class HandControllerLedFrameTests(unittest.TestCase):
         self.config = HandiConfig(
             enabled=True,
             step=10,
-            joints=(JointLimit("thumb", 10, 20, 15, open_position=10),),
+            joints=(JointLimit("thumb", 10, 20),),
             grips=(GripPreset("fist", (("thumb", 20),), self.led_frame),),
         )
         self.controller = HandController(self.config, self.rpc)
@@ -77,7 +77,7 @@ class HandControllerLedFrameTests(unittest.TestCase):
         config = HandiConfig(
             enabled=True,
             step=10,
-            joints=(JointLimit("thumb", 10, 20, 15, open_position=10),),
+            joints=(JointLimit("thumb", 10, 20),),
             grips=(GripPreset("open", (("thumb", 10),)),),
         )
         controller = HandController(config, self.rpc)
@@ -111,8 +111,8 @@ class HandControllerGripRelativeOpennessTests(unittest.TestCase):
             step=10,
             openness_step=0.5,
             joints=(
-                JointLimit("thumb", 0, 100, 0, open_position=0),
-                JointLimit("index", 0, 100, 0, open_position=0),
+                JointLimit("thumb", 0, 100),
+                JointLimit("index", 0, 100),
             ),
             grips=(
                 GripPreset("pinch", (("thumb", 40), ("index", 80))),

@@ -271,20 +271,16 @@ class DashboardConfig:
 
 @dataclass(frozen=True, slots=True)
 class JointLimit:
-    """Verified safe range, startup position, and open-hand reference for one joint.
+    """Verified safe range for one joint.
 
-    ``open_position`` is this joint's own "fully open" endpoint — the pose
-    open/close gestures blend away from, per ``HandController.apply_prediction``.
-    It need not equal ``minimum`` or ``start``: gearing and mechanical stops
-    differ per joint, so "open" isn't guaranteed to be the smaller of the two
-    limits.
+    ``minimum`` doubles as both this joint's startup position (sent by
+    ``HandController.apply_start_pose``) and its "fully open" reference that
+    open/close gestures blend away from (``HandController.apply_prediction``).
     """
 
     name: str
     minimum: float
     maximum: float
-    start: float
-    open_position: float
 
     def clamp(self, value: float) -> float:
         """Return ``value`` limited to this joint's inclusive safe range."""
