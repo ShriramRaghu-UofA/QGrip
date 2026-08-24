@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from qgrip.errors import ArtifactError
+from qgrip.core.errors import ArtifactError
 
 LIBEMG_GESTURES_COMMIT = "c17792f1966f23f7dafda7c47a65012e47a2e7ee"
 LIBEMG_GESTURES_URL = "https://github.com/LibEMG/LibEMGGestures"

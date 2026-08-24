@@ -4,9 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from qgrip.domain import NormalizationMode
-from qgrip.errors import ValidationError
-from qgrip.profiles import load_profile, write_profile_atomic
+from qgrip.core.domain import NormalizationMode
+from qgrip.core.errors import ValidationError
+from qgrip.core.profiles import load_profile, write_profile_atomic
 from tests.helpers import write_profile
 
 

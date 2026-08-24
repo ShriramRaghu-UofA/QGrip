@@ -217,9 +217,9 @@ worker for the lifetime of the `with` block.
 import time
 from dataclasses import replace
 
-from qgrip.profiles import load_profile
-from qgrip.streaming import LiveEMGSession, PredictionDebouncer, sample_rates_match
-from qgrip.workflows import InferenceService
+from qgrip.core.profiles import load_profile
+from qgrip.capture.streaming import LiveEMGSession, PredictionDebouncer, sample_rates_match
+from qgrip.runtime.workflows import InferenceService
 
 profile = load_profile("profile.json")
 model = InferenceService("data/demo/models/RUN/model.pt", profile.inference.backend)
@@ -342,10 +342,9 @@ acknowledgement timeout, capture flush/compression/durability behavior, and nest
 signal-health thresholds. `model.architecture` accepts only parameters for the selected
 model (for example, Transformer `d_model`, `nhead`, `dim_feedforward`, and `dropout`).
 `inference` owns output cadence, confidence/debounce policy, and its short cooperative
-waits. `dashboard.handi_timeout_seconds` controls only the optional Handi health and
-calibration HTTP proxy. The shipped templates provide normal operating values; fields
-they omit receive the versioned schema defaults. Use
-`qgrip profile show <profile.json>` to inspect the fully resolved document.
+waits. The shipped templates provide normal operating values; fields they omit receive
+the versioned schema defaults. Use `qgrip profile show <profile.json>` to inspect the
+fully resolved document.
 
 ## Artifact contracts
 
@@ -397,20 +396,15 @@ unversioned checkpoints are rejected rather than guessed or migrated.
 ## Standalone Handi
 
 ```powershell
-uv run qgrip-rpc-handi --profile handi.json --model data/demo/models/RUN/model.pt --no-api
+uv run qgrip-rpc-handi --profile handi.json --model data/demo/models/RUN/model.pt
 ```
 
 The standalone command owns acquisition, inference, the Unix-domain Arduino Router
-RPC connection, start pose, movement, and shutdown. An optional loopback observer API
-can be enabled in the profile. The App Lab Brick/sketch lives separately; configure
-its repository in `qgrip.handi.HANDI_BRICK_REPOSITORY_URL` when published.
+RPC connection, start pose, movement, and shutdown. The App Lab Brick/sketch lives
+separately; configure its repository in
+`qgrip.runtime.handi.HANDI_BRICK_REPOSITORY_URL` when published.
 
-The observer API has no authentication and only defaults to loopback. Keep
-`handi.api_host` on a trusted loopback interface unless an authenticated network boundary
-is supplied outside QGrip.
-
-Calibration persistence is not implemented yet. The observer API can jog and read live
-positions, but `/api/v1/calibration/save` reports `saved: false`. Likewise,
+Calibration persistence is not implemented yet.
 `qgrip handi calibrate --output <path>` currently writes an atomically validated copy of
 the loaded profile; it does not query the controller or replace joint limits from hardware.
 

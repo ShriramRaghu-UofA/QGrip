@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from qgrip.models import (
+from qgrip.ml.models import (
     MODEL_NAMES,
     ONNXEMGClassifier,
     create_model,

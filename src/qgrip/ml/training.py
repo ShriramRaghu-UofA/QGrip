@@ -20,7 +20,7 @@ from torch import nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, Dataset, Subset
 
-from qgrip.artifacts import (
+from qgrip.capture.artifacts import (
     calibration_path,
     export_capture,
     latest_capture,
@@ -28,17 +28,22 @@ from qgrip.artifacts import (
     parquet_path,
     subject_root,
 )
-from qgrip.domain import (
+from qgrip.core.domain import (
     ClassSampleCount,
     EpochMetric,
     TrainingConfig,
     TrainingRequest,
     TrainingSummary,
 )
-from qgrip.errors import ArtifactError
-from qgrip.models import CHECKPOINT_VERSION, BaseEMGClassifier, create_model, export_model_to_onnx
+from qgrip.core.errors import ArtifactError
+from qgrip.ml.models import (
+    CHECKPOINT_VERSION,
+    BaseEMGClassifier,
+    create_model,
+    export_model_to_onnx,
+)
 
-LOGGER = logging.getLogger("qgrip.training")
+LOGGER = logging.getLogger("qgrip.ml.training")
 
 
 @dataclass(frozen=True, slots=True)

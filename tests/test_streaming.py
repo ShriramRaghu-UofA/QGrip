@@ -3,8 +3,13 @@ import unittest
 import numpy as np
 from sifi_streamer.acquisition.reader import SignalWindow
 
-from qgrip.domain import DeviceConfig, DeviceKind, Prediction
-from qgrip.streaming import LiveEMGSession, MyoAcquisitionDevice, MyoPacket, PredictionDebouncer
+from qgrip.capture.streaming import (
+    LiveEMGSession,
+    MyoAcquisitionDevice,
+    MyoPacket,
+    PredictionDebouncer,
+)
+from qgrip.core.domain import DeviceConfig, DeviceKind, Prediction
 
 
 class _Reader:

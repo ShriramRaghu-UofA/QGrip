@@ -49,7 +49,7 @@ class NormalizationMode(StrEnum):
 
 
 class JobState(StrEnum):
-    """Lifecycle state reported by :class:`~qgrip.workflows.WorkflowCoordinator`."""
+    """Lifecycle state reported by :class:`~qgrip.runtime.workflows.WorkflowCoordinator`."""
 
     IDLE = "idle"
     RUNNING = "running"
@@ -223,12 +223,10 @@ class InferenceConfig:
 
 @dataclass(frozen=True, slots=True)
 class DashboardConfig:
-    """Local dashboard bind address and optional standalone-Handi proxy target."""
+    """Local dashboard bind address."""
 
     host: str = "127.0.0.1"
     port: int = 8765
-    handi_url: str | None = None
-    handi_timeout_seconds: float = 2.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -282,9 +280,6 @@ class HandiConfig:
     enabled: bool = False
     rpc_socket: str = "/var/run/arduino-router.sock"
     rpc_timeout_seconds: float = 1.0
-    api_enabled: bool = False
-    api_host: str = "127.0.0.1"
-    api_port: int = 8770
     step: float = 5.0
     openness_step: float = 0.1
     joints: tuple[JointLimit, ...] = ()

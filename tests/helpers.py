@@ -66,14 +66,13 @@ def write_profile(root: Path, *, handi: bool = False) -> Path:
             "idle_poll_seconds": 0.002,
             "maximum_wait_seconds": 0.01,
         },
-        "dashboard": {"host": "127.0.0.1", "port": 8765, "handi_timeout_seconds": 2},
+        "dashboard": {"host": "127.0.0.1", "port": 8765},
     }
     if handi:
         document["handi"] = {
             "enabled": True,
             "rpc_socket": "/tmp/router.sock",
             "rpc_timeout_seconds": 0.1,
-            "api_enabled": False,
             "step": 5,
             "joints": [
                 {"name": "thumb", "minimum": 10, "maximum": 20, "start": 15, "open_position": 10},

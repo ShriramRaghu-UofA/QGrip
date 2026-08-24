@@ -4,8 +4,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from qgrip.api import create_app, notification_for
-from qgrip.cli import main
+from qgrip.runtime.api import create_app, notification_for
+from qgrip.runtime.cli import main
 from tests.helpers import write_profile
 
 
@@ -35,7 +35,7 @@ class AdapterTests(unittest.TestCase):
     def test_stream_frames_use_named_channels(self) -> None:
         # Exercise the event generator directly: consuming it through the live
         # ASGI stream would block on the intentionally endless push loop.
-        from qgrip.domain import JobState, JobStatus
+        from qgrip.core.domain import JobState, JobStatus
 
         completed = JobStatus("job", "training", JobState.COMPLETED)
         failed = JobStatus("job", "training", JobState.FAILED, message="boom")
@@ -55,7 +55,7 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(exit_context.exception.code, 0)
 
     def test_infer_defaults_to_live_with_an_explicit_once_mode(self) -> None:
-        from qgrip.cli import build_parser
+        from qgrip.runtime.cli import build_parser
 
         live = build_parser().parse_args(["infer", "model.pt", "--profile", "profile.json"])
         once = build_parser().parse_args(

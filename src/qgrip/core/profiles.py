@@ -18,7 +18,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, cast
 
-from qgrip.domain import (
+from qgrip.core.domain import (
     DEFAULT_ACTIVATION_LEVELS,
     LED_MATRIX_PIXELS,
     AcquisitionConfig,
@@ -38,7 +38,7 @@ from qgrip.domain import (
     SGTConfig,
     TrainingConfig,
 )
-from qgrip.errors import ValidationError
+from qgrip.core.errors import ValidationError
 
 SCHEMA_VERSION = 1
 
@@ -502,19 +502,15 @@ def _parse_inference(raw: object) -> InferenceConfig:
 
 
 def _parse_dashboard(raw: object) -> DashboardConfig:
-    """Validate dashboard bind settings and its optional Handi observer proxy."""
+    """Validate dashboard bind settings."""
     data = _object(raw, "dashboard")
-    _only(data, {"host", "port", "handi_url", "handi_timeout_seconds"}, "dashboard")
+    _only(data, {"host", "port"}, "dashboard")
     port = _integer(data.get("port", 8765), "dashboard.port", minimum=1)
     if port > 65535:
         raise ValidationError("dashboard.port must be <= 65535")
     return DashboardConfig(
         _string(data.get("host", "127.0.0.1"), "dashboard.host"),
         port,
-        _optional_string(data.get("handi_url"), "dashboard.handi_url"),
-        _finite(
-            data.get("handi_timeout_seconds", 2), "dashboard.handi_timeout_seconds", positive=True
-        ),
     )
 
 
@@ -529,9 +525,6 @@ def _parse_handi(raw: object | None) -> HandiConfig | None:
             "enabled",
             "rpc_socket",
             "rpc_timeout_seconds",
-            "api_enabled",
-            "api_host",
-            "api_port",
             "step",
             "openness_step",
             "joints",
@@ -580,9 +573,6 @@ def _parse_handi(raw: object | None) -> HandiConfig | None:
         rpc_timeout_seconds=_finite(
             data.get("rpc_timeout_seconds", 1), "handi.rpc_timeout_seconds", positive=True
         ),
-        api_enabled=bool(data.get("api_enabled", False)),
-        api_host=_string(data.get("api_host", "127.0.0.1"), "handi.api_host"),
-        api_port=_integer(data.get("api_port", 8770), "handi.api_port", minimum=1),
         step=_finite(data.get("step", 5), "handi.step", positive=True),
         openness_step=_finite(
             data.get("openness_step", 0.1), "handi.openness_step", positive=True
@@ -789,5 +779,148 @@ def default_profile(kind: DeviceKind | str = DeviceKind.SYNTHETIC) -> dict[str, 
             "idle_poll_seconds": 0.002,
             "maximum_wait_seconds": 0.01,
         },
-        "dashboard": {"host": "127.0.0.1", "port": 8765, "handi_timeout_seconds": 2.0},
+        "dashboard": {"host": "127.0.0.1", "port": 8765},
+        "handi": {
+            "enabled": True,
+            "rpc_socket": "/var/run/arduino-router.sock",
+            "rpc_timeout_seconds": 5,
+            "step": 60,
+            "openness_step": 0.05,
+            "joints": [
+                {
+                    "name": "thumb_rotate",
+                    "minimum": 2244,
+                    "maximum": 2840,
+                    "start": 2244,
+                    "open_position": 2244,
+                },
+                {
+                    "name": "thumb_flex",
+                    "minimum": 2100,
+                    "maximum": 2944,
+                    "start": 2100,
+                    "open_position": 2100,
+                },
+                {
+                    "name": "index",
+                    "minimum": 2180,
+                    "maximum": 3764,
+                    "start": 2180,
+                    "open_position": 2180,
+                },
+                {
+                    "name": "middle",
+                    "minimum": 2173,
+                    "maximum": 3841,
+                    "start": 2173,
+                    "open_position": 2173,
+                },
+                {
+                    "name": "ring",
+                    "minimum": 2103,
+                    "maximum": 3783,
+                    "start": 2103,
+                    "open_position": 2103,
+                },
+                {
+                    "name": "baby",
+                    "minimum": 2091,
+                    "maximum": 3706,
+                    "start": 2091,
+                    "open_position": 2091,
+                },
+            ],
+            "grips": [
+                {
+                    "name": "precision_pinch",
+                    "positions": {
+                        "thumb_rotate": 2804,
+                        "thumb_flex": 2695,
+                        "index": 2994,
+                        "middle": 2449,
+                        "ring": 2355,
+                        "baby": 2333,
+                    },
+                    "led_frame": [
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 7, 7, 7, 7, 7, 7, 7, 7, 7, 0, 0,
+                        0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0,
+                        0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0,
+                        0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0,
+                        0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0,
+                        0, 0, 7, 7, 7, 7, 7, 7, 7, 7, 7, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    ],
+                },
+                {
+                    "name": "3_jaw_chuck",
+                    "positions": {
+                        "thumb_rotate": 2840,
+                        "thumb_flex": 2704,
+                        "index": 2961,
+                        "middle": 3249,
+                        "ring": 2223,
+                        "baby": 2173,
+                    },
+                    "led_frame": [
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 7, 7, 7, 7, 7, 7, 7, 7, 7, 0, 0,
+                        0, 0, 7, 7, 7, 7, 7, 7, 7, 7, 7, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    ],
+                },
+                {
+                    "name": "column_grip",
+                    "positions": {
+                        "thumb_rotate": 2840,
+                        "thumb_flex": 2592,
+                        "index": 3606,
+                        "middle": 3674,
+                        "ring": 3615,
+                        "baby": 3544,
+                    },
+                    "led_frame": [
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 7, 7, 7, 7, 7, 0, 0, 0, 7, 0, 0,
+                        0, 0, 7, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0,
+                        0, 0, 7, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0,
+                        0, 0, 7, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0,
+                        0, 0, 7, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0,
+                        0, 0, 7, 0, 0, 0, 7, 7, 7, 7, 7, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    ],
+                },
+                {
+                    "name": "lateral_key_grip",
+                    "positions": {
+                        "thumb_rotate": 2392,
+                        "thumb_flex": 2848,
+                        "index": 3447,
+                        "middle": 3745,
+                        "ring": 3615,
+                        "baby": 3544,
+                    },
+                    "led_frame": [
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 7, 7, 7, 7, 7, 7, 7, 7, 7, 0, 0,
+                        0, 0, 7, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0,
+                        0, 0, 7, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0,
+                        0, 0, 7, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0,
+                        0, 0, 7, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0,
+                        0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    ],
+                },
+            ],
+            "gesture_mapping": {
+                "open": "open",
+                "close": "close",
+                "wrist_flexion": "next",
+                "wrist_extension": "prev",
+            },
+        },
     }

@@ -1,6 +1,6 @@
 import unittest
 
-from qgrip.rpc import RESPONSE, MessagePackRpcClient, _Pending
+from qgrip.capture.rpc import RESPONSE, MessagePackRpcClient, _Pending
 
 
 class RpcTests(unittest.TestCase):

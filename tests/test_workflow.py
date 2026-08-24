@@ -10,8 +10,13 @@ import numpy as np
 import pyarrow.parquet as pq
 from sifi_streamer.capture import CaptureLogWriter
 
-from qgrip.artifacts import calibration_path, export_capture, read_capture, write_calibration_atomic
-from qgrip.domain import (
+from qgrip.capture.artifacts import (
+    calibration_path,
+    export_capture,
+    read_capture,
+    write_calibration_atomic,
+)
+from qgrip.core.domain import (
     JobState,
     ModelName,
     SGTCommand,
@@ -19,8 +24,8 @@ from qgrip.domain import (
     SGTRequest,
     TrainingRequest,
 )
-from qgrip.profiles import load_profile
-from qgrip.workflows import (
+from qgrip.core.profiles import load_profile
+from qgrip.runtime.workflows import (
     InferenceService,
     ProgressCallback,
     SGTCommandGate,

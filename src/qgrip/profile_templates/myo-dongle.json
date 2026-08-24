@@ -30,5 +30,5 @@
     "inference_period_seconds": 0.016666666666666666,
     "switch_predictions": 3, "idle_poll_seconds": 0.002, "maximum_wait_seconds": 0.01
   },
-  "dashboard": {"host": "127.0.0.1", "port": 8765, "handi_timeout_seconds": 2.0}
+  "dashboard": {"host": "127.0.0.1", "port": 8765}
 }

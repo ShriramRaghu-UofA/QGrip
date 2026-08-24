@@ -11,14 +11,14 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated
 
-import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
-from qgrip.artifacts import discover_artifacts, load_calibration, subject_root
-from qgrip.domain import (
+from qgrip.capture.artifacts import discover_artifacts, load_calibration, subject_root
+from qgrip.capture.streaming import check_streamer_device
+from qgrip.core.domain import (
     JobState,
     JobStatus,
     ModelName,
@@ -27,10 +27,9 @@ from qgrip.domain import (
     SGTRequest,
     TrainingRequest,
 )
-from qgrip.errors import ArtifactError, QGripError
-from qgrip.profiles import load_profile
-from qgrip.streaming import check_streamer_device
-from qgrip.workflows import WorkflowCoordinator
+from qgrip.core.errors import ArtifactError, QGripError
+from qgrip.core.profiles import load_profile
+from qgrip.runtime.workflows import WorkflowCoordinator
 
 
 def notification_for(status: JobStatus) -> dict[str, object] | None:
@@ -80,13 +79,6 @@ class TrainingWire(SubjectWire):
 
     inputs: list[str] = []
     model: ModelName | None = None
-
-
-class CalibrationWire(WireModel):
-    """Request forwarded to the independent Handi calibration-jog API."""
-
-    joint: str
-    delta: float
 
 
 class InferenceWire(WireModel):
@@ -275,36 +267,13 @@ def create_app(
         """Start exclusive live inference for the selected artifact."""
         return asdict(owner.start_inference(Path(body.model).resolve(), current))
 
-    @app.get("/api/v1/handi/status", dependencies=protected)
-    async def handi_status() -> dict[str, object]:
-        """Proxy Handi state without assuming ownership of its process or hardware."""
-        if not current.dashboard.handi_url:
-            return {"configured": False}
-        async with httpx.AsyncClient(timeout=current.dashboard.handi_timeout_seconds) as client:
-            response = await client.get(f"{current.dashboard.handi_url.rstrip('/')}/api/v1/status")
-            response.raise_for_status()
-            return {"configured": True, "remote": response.json()}
-
-    @app.post("/api/v1/handi/calibration", dependencies=protected)
-    async def handi_calibration(body: CalibrationWire) -> dict[str, object]:
-        """Proxy a bounded calibration jog to independently running Handi."""
-        if not current.dashboard.handi_url:
-            return {"configured": False}
-        async with httpx.AsyncClient(timeout=current.dashboard.handi_timeout_seconds) as client:
-            response = await client.post(
-                f"{current.dashboard.handi_url.rstrip('/')}/api/v1/calibration/jog",
-                json=body.model_dump(),
-            )
-            response.raise_for_status()
-            return response.json()
-
     @app.post("/api/v1/server/stop", dependencies=protected)
     def server_stop() -> dict[str, bool]:
         """Close the coordinator and request dashboard-owned workflow shutdown."""
         owner.close()
         return {"stopping": True}
 
-    assets = Path(__file__).parent / "dashboard"
+    assets = Path(__file__).parent.parent / "dashboard"
     if assets.exists():
         app.mount(
             "/assets", StaticFiles(directory=assets / "assets", check_dir=False), name="assets"

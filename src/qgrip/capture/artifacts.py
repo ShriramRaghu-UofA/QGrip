@@ -25,11 +25,11 @@ from sifi_streamer.capture import (
     record_to_wire_map,
 )
 
-from qgrip.domain import ArtifactMetadata, QGripProfile
-from qgrip.errors import ArtifactError, ValidationError
-from qgrip.streaming import EMG_STREAM_ID
+from qgrip.capture.streaming import EMG_STREAM_ID
+from qgrip.core.domain import ArtifactMetadata, QGripProfile
+from qgrip.core.errors import ArtifactError, ValidationError
 
-LOGGER = logging.getLogger("qgrip.artifacts")
+LOGGER = logging.getLogger("qgrip.capture.artifacts")
 
 
 def validate_subject(subject: str) -> str:
