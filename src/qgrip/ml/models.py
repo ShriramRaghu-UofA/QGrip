@@ -214,7 +214,7 @@ class TransformerEMGClassifier(BaseEMGClassifier):
 
 
 class CNN1DEMGClassifier(BaseEMGClassifier):
-    """Temporal one-dimensional convolutional EMG classifier."""
+    """Classify from the latest feature in a temporal convolution sequence."""
 
     def __init__(self, *, hidden_channels: int = 64, dropout: float = 0, **config: Any) -> None:
         """Build temporal convolution blocks and classifier heads."""
@@ -229,8 +229,6 @@ class CNN1DEMGClassifier(BaseEMGClassifier):
             nn.ReLU(),
         )
         self.classifier = nn.Sequential(
-            nn.AdaptiveAvgPool1d(1),
-            nn.Flatten(),
             nn.Dropout(dropout),
             nn.Linear(hidden_channels, config["n_classes"]),
         )
@@ -239,15 +237,15 @@ class CNN1DEMGClassifier(BaseEMGClassifier):
     def forward(self, values: torch.Tensor) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Classify token sequences and optionally estimate proportional activation."""
         encoded = self.features(self.preprocessor(values).transpose(1, 2))
-        features = self.classifier[:-1](encoded)
-        logits = self.classifier[-1](features)
+        features = encoded[:, :, -1]
+        logits = self.classifier(features)
         if self.activation_head is None:
             return logits
         return logits, torch.sigmoid(self.activation_head(features)).squeeze(1)
 
 
 class CNN2DEMGClassifier(BaseEMGClassifier):
-    """Two-dimensional convolutional classifier over channel spectrogram images."""
+    """Classify from the latest temporal column of a convolved spectrogram."""
 
     def __init__(
         self,
@@ -260,17 +258,15 @@ class CNN2DEMGClassifier(BaseEMGClassifier):
         super().__init__(**config)
         self._model_config.update(hidden_channels=hidden_channels, dropout=dropout)
         self.features = nn.Sequential(
-            nn.Conv2d(self.n_channels, hidden_channels, 3, padding=1, stride=4),
+            nn.Conv2d(self.n_channels, hidden_channels, 3, padding=1, stride=(4, 1)),
             nn.BatchNorm2d(hidden_channels),
             nn.ReLU(),
-            nn.Conv2d(hidden_channels, hidden_channels * 2, 3, padding=1, stride=4),
+            nn.Conv2d(hidden_channels, hidden_channels * 2, 3, padding=1, stride=(4, 1)),
             nn.BatchNorm2d(hidden_channels * 2),
             nn.ReLU(),
         )
 
         self.classifier = nn.Sequential(
-            nn.AdaptiveMaxPool2d(1),
-            nn.Flatten(),
             nn.Dropout(dropout),
             nn.Linear(hidden_channels * 2, config["n_classes"]),
         )
@@ -281,8 +277,8 @@ class CNN2DEMGClassifier(BaseEMGClassifier):
     def forward(self, values: torch.Tensor) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Classify spectrogram images and optionally estimate activation."""
         encoded = self.features(self.preprocessor.spectrogram(values))
-        features = self.classifier[:-1](encoded)
-        logits = self.classifier[-1](features)
+        features = encoded[..., -1].amax(dim=-1)
+        logits = self.classifier(features)
         if self.activation_head is None:
             return logits
         return logits, torch.sigmoid(self.activation_head(features)).squeeze(1)

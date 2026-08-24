@@ -8,6 +8,7 @@ import torch
 
 from qgrip.ml.models import (
     MODEL_NAMES,
+    CNN1DEMGClassifier,
     CNN2DEMGClassifier,
     ONNXEMGClassifier,
     TransformerEMGClassifier,
@@ -15,6 +16,34 @@ from qgrip.ml.models import (
     export_model_to_onnx,
     load_model_checkpoint,
 )
+
+
+def _classifier_input_for_encoded(
+    model: CNN1DEMGClassifier | CNN2DEMGClassifier,
+    encoded: torch.Tensor,
+) -> torch.Tensor:
+    classifier_inputs: list[torch.Tensor] = []
+
+    def replace_encoder_output(
+        _module: torch.nn.Module,
+        inputs: tuple[torch.Tensor, ...],
+        _output: torch.Tensor,
+    ) -> torch.Tensor:
+        return encoded.expand(inputs[0].shape[0], *encoded.shape[1:])
+
+    def record_classifier_input(_module: torch.nn.Module, inputs: tuple[torch.Tensor, ...]) -> None:
+        classifier_inputs.append(inputs[0].detach())
+
+    encoder_hook = model.features.register_forward_hook(replace_encoder_output)
+    classifier_hook = model.classifier.register_forward_pre_hook(record_classifier_input)
+    try:
+        model(torch.zeros(2, 32, 8))
+    finally:
+        encoder_hook.remove()
+        classifier_hook.remove()
+    if len(classifier_inputs) != 1:
+        raise AssertionError("classifier must receive exactly one feature tensor")
+    return classifier_inputs[0]
 
 
 class ModelTests(unittest.TestCase):
@@ -79,7 +108,28 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(len(classifier_inputs), 1)
         self.assertTrue(torch.equal(classifier_inputs[0], encoded[:, -1].expand(2, -1)))
 
-    def test_cnn2d_uses_adaptive_max_pooling(self) -> None:
+    def test_cnn1d_classifies_from_latest_encoded_step(self) -> None:
+        model = cast(
+            CNN1DEMGClassifier,
+            create_model(
+                "cnn1d",
+                n_classes=3,
+                window_size=32,
+                n_channels=8,
+                n_fft=16,
+                hop_length=4,
+                normalization="dataset_standardize",
+                predict_activation=False,
+                hidden_channels=3,
+            ),
+        )
+        encoded = torch.tensor([[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]])
+
+        features = _classifier_input_for_encoded(model, encoded)
+
+        self.assertTrue(torch.equal(features, encoded[:, :, -1].expand(2, -1)))
+
+    def test_cnn2d_classifies_from_latest_temporal_column(self) -> None:
         model = cast(
             CNN2DEMGClassifier,
             create_model(
@@ -91,10 +141,18 @@ class ModelTests(unittest.TestCase):
                 hop_length=4,
                 normalization="dataset_standardize",
                 predict_activation=False,
+                hidden_channels=2,
             ),
         )
+        encoded = torch.arange(24, dtype=torch.float32).reshape(1, 4, 2, 3)
 
-        self.assertIsInstance(model.classifier[0], torch.nn.AdaptiveMaxPool2d)
+        features = _classifier_input_for_encoded(model, encoded)
+
+        expected = encoded[..., -1].amax(dim=-1).expand(2, -1)
+        self.assertTrue(torch.equal(features, expected))
+
+        spectrogram = model.preprocessor.spectrogram(torch.zeros(1, 32, 8))
+        self.assertEqual(model.features(spectrogram).shape[-1], model.n_frames)
 
     def test_self_describing_checkpoint_round_trip(self) -> None:
         model = create_model(
@@ -133,7 +191,7 @@ class ModelTests(unittest.TestCase):
 
     def test_builtin_stft_exports_and_runs_in_onnx_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            for name in ("dense", "transformer"):
+            for name in MODEL_NAMES:
                 with self.subTest(model=name):
                     model = create_model(
                         name,
