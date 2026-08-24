@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-import curses
 import logging
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    import curses
 
 from qgrip.capture.rpc import MessagePackRpcClient
 from qgrip.capture.streaming import LiveEMGSession, PredictionDebouncer, sample_rates_match
@@ -307,6 +309,8 @@ def _calibrate_endpoint(
     Returns (outcome, final_position); outcome is "saved", "discarded", or "quit"
     (Ctrl-C/q — aborts the whole wizard).
     """
+    import curses
+
     label = "FLEX (maximum)" if as_maximum else "EXTEND (minimum, also open/start position)"
     pos = start_pos
     status = ""
@@ -366,6 +370,8 @@ def _calibrate_motor(
     joint's existing limit untouched, since that endpoint is still whatever it was
     before). Returns False on quit.
     """
+    import curses
+
     order = list(joints)
     joint_id = order.index(joint_name) + 1
 
@@ -413,6 +419,8 @@ def _list_menu(
 
     Returns the chosen id, or None if the user quit (q/Ctrl-C).
     """
+    import curses
+
     selected = 0
     while True:
         stdscr.erase()
@@ -482,6 +490,8 @@ def _calibrate_grip_digit(
 
     Returns "saved", "discarded", or "quit" (Ctrl-C/q — aborts the whole wizard).
     """
+    import curses
+
     pos = start_pos
     status = ""
     fast_step = min(JOG_STEP_FAST, controller.config.step)
@@ -538,6 +548,8 @@ def _calibrate_grip(
     joint to reshape. Edits `grips[grip_name]` in place. Returns False if the user
     quit the whole wizard (q/Ctrl-C at any point).
     """
+    import curses
+
     try:
         controller.apply_grip(grip_name)
     except (RpcError, ValidationError) as exc:
@@ -574,6 +586,8 @@ def _wizard_main(
     joints: dict[str, JointLimit],
     grips: dict[str, GripPreset],
 ) -> None:
+    import curses
+
     curses.curs_set(0)
     stdscr.keypad(True)
     while True:
@@ -628,7 +642,14 @@ def run_interactive(profile: QGripProfile, rpc: MotorRpc, output: Path) -> None:
     On exit, the resulting joints/grips (unchanged unless you ran the matching
     mode) are written back into `profile.handi` and persisted to `output` via
     write_profile_atomic — see qgrip.core.profiles.
+
+    curses is POSIX-only (no _curses module ships with Windows Python), so this
+    import is deferred to here rather than module scope — every other command in
+    this file must stay importable on Windows even though the Handi RPC socket
+    (AF_UNIX) already limits the rest of standalone Handi to POSIX.
     """
+    import curses
+
     from qgrip.core.profiles import write_profile_atomic
 
     config = profile.handi
