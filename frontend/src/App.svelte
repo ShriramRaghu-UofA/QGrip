@@ -13,7 +13,7 @@
   import StagePanel from './StagePanel.svelte';
 
   /** Ordered dashboard workflow stages used for navigation and progress context. */
-  const stages = ['Setup', 'Collect', 'Train', 'Validate', 'Handi'] as const;
+  const stages = ['Setup', 'Collect', 'Train', 'Validate'] as const;
   type Stage = (typeof stages)[number];
   type Theme = 'dracula' | 'nord' | 'light';
 
@@ -583,7 +583,7 @@
           {#if modelPath}<div class="alert alert-success"><span>Checkpoint ready: {modelPath}</span></div>{/if}
           <div class="card-actions justify-end"><button class="btn" onclick={() => void api.request('/api/v1/training/cancel', { method: 'POST' })}>Cancel</button><button class="btn btn-secondary" onclick={() => void start('/api/v1/training/start', { subject, model, inputs: trainingInput ? [trainingInput] : [], discrete: !proportional }, '/api/v1/training/status')}>Train model</button></div>
         </StagePanel>
-      {:else if stage === 'Validate'}
+      {:else}
         <StagePanel title="Validate" description="Inspect class, confidence, activation, signal health, and end-to-end latency." active>
           <select class="select w-full" bind:value={modelPath} aria-label="Inference checkpoint"><option value="">Select a checkpoint</option>{#each artifacts.filter((path) => path.endsWith('.pt')) as path (path)}<option value={path}>{path}</option>{/each}</select>
           <div class="stats stats-vertical bg-base-300 sm:stats-horizontal"><div class="stat"><div class="stat-title">Class</div><div class="stat-value">{status.prediction?.gesture ?? '—'}</div></div><div class="stat"><div class="stat-title">Confidence</div><div class="stat-value text-success">{status.prediction ? `${Math.round(status.prediction.confidence * 100)}%` : '—'}</div></div><div class="stat"><div class="stat-title">Activation</div><div class="stat-value">{status.prediction ? `${Math.round(status.prediction.activation * 100)}%` : '—'}</div></div><div class="stat"><div class="stat-title">Latency</div><div class="stat-value">{status.prediction ? status.prediction.latency_ms.toFixed(1) : '—'} ms</div></div></div>
@@ -604,12 +604,6 @@
           {/if}
           <MetricPlot history={predictionHistory} />
           <div class="card-actions justify-end">{#if inferenceRunning}<button class="btn btn-error" onclick={() => void api.request('/api/v1/inference/stop', { method: 'POST' })}>Stop live inference</button>{:else}<button class="btn btn-primary" disabled={!modelPath} onclick={() => void start('/api/v1/inference/start', { model: modelPath }, '/api/v1/inference/status')}>Start live inference</button>{/if}</div>
-        </StagePanel>
-      {:else}
-        <StagePanel title="Handi" description="Observe the remote standalone controller and perform bounded calibration." active>
-          <div class="alert alert-warning"><span>Stopping software commands does not disable servo torque or replace a physical emergency stop.</span></div>
-          <div class="stats bg-base-300"><div class="stat"><div class="stat-title">UNO Q</div><div class="stat-value text-xl">Not connected</div><div class="stat-desc">Dashboard uses a server-side proxy</div></div></div>
-          <div class="card-actions justify-end"><button class="btn btn-primary" onclick={() => void api.request('/api/v1/handi/status').catch((cause) => (error = String(cause)))}>Refresh status</button></div>
         </StagePanel>
       {/if}
     </div>

@@ -5,6 +5,7 @@ import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pyarrow.parquet as pq
@@ -26,6 +27,7 @@ from qgrip.core.domain import (
 )
 from qgrip.core.profiles import load_profile
 from qgrip.runtime.workflows import (
+    CalibrationService,
     InferenceService,
     ProgressCallback,
     SGTCommandGate,
@@ -285,6 +287,19 @@ class SyntheticWorkflowTests(unittest.TestCase):
                 if stage == "presentation":
                     self.assertEqual(runs[index - 1], "preparation")
 
+    def test_preparation_preserves_accumulated_trial_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            profile = load_profile(write_profile(Path(directory)))
+            self.calibrate(profile, "s")
+            progress: list[SGTProgress] = []
+            SGTService().run(SGTRequest("s", profile, False), threading.Event(), progress.append)
+            prep_trials = [
+                item.trial for item in progress if item.stage == "preparation"
+            ]
+            self.assertTrue(len(prep_trials) > 0)
+            # Later preparation periods must reflect already completed presentations.
+            self.assertTrue(max(prep_trials) > 0)
+
     def test_preparation_can_be_disabled(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             profile = load_profile(write_profile(Path(directory)))
@@ -363,3 +378,30 @@ class SyntheticWorkflowTests(unittest.TestCase):
             # A repeated take is superseded, so the export still projects clean rows.
             table = pq.read_table(export_capture(capture, activation_energy_window_seconds=0.1))
             self.assertGreater(table.num_rows, 0)
+
+    def test_calibration_completion_emits_final_trial_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            profile = load_profile(write_profile(Path(directory)))
+            progress: list[SGTProgress] = []
+            cal_file = Path(directory) / "cal.json"
+            with patch("qgrip.runtime.workflows.derive_calibration", return_value=cal_file):
+                CalibrationService().run("s", profile, threading.Event(), progress.append)
+            self.assertTrue(len(progress) > 0)
+            final = progress[-1]
+            self.assertEqual(final.state, JobState.COMPLETED)
+            self.assertEqual(final.stage, "calibration")
+            self.assertEqual(final.trial, len(profile.sgt.gestures))
+            self.assertEqual(final.total_trials, len(profile.sgt.gestures))
+
+    def test_sgt_completion_emits_final_trial_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            profile = load_profile(write_profile(Path(directory)))
+            self.calibrate(profile, "s")
+            progress: list[SGTProgress] = []
+            SGTService().run(SGTRequest("s", profile, False), threading.Event(), progress.append)
+            self.assertTrue(len(progress) > 0)
+            final = progress[-1]
+            self.assertEqual(final.state, JobState.COMPLETED)
+            expected_total = profile.sgt.trials * len(profile.sgt.gestures)
+            self.assertEqual(final.trial, expected_total)
+            self.assertEqual(final.total_trials, expected_total)

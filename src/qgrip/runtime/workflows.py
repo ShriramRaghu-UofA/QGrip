@@ -168,7 +168,15 @@ class CalibrationService:
                 runtime.controller.close(reason)
         result = derive_calibration(output, profile, calibration_path(profile, subject))
         if progress:
-            progress(SGTProgress(JobState.COMPLETED, stage="calibration", capture=result))
+            progress(
+                SGTProgress(
+                    JobState.COMPLETED,
+                    stage="calibration",
+                    trial=len(labels),
+                    total_trials=len(labels),
+                    capture=result,
+                )
+            )
         return result
 
 
@@ -272,7 +280,9 @@ class SGTService:
                     """Return the held target for one stepped presentation."""
                     return 0.0 if gesture == "rest" else target
 
-                def run_preparation(gesture: str, target: float) -> None:
+                def run_preparation(
+                    gesture: str, target: float, trial_index: int = 0
+                ) -> None:
                     """Give the operator a brief get-ready countdown before a prompt.
 
                     The preparation period paces the transition into practice
@@ -295,6 +305,7 @@ class SGTService:
                                     stage="preparation",
                                     instruction=_stage_instruction("preparation", gesture),
                                     stimulus_image=_stimulus_image(profile, gesture),
+                                    trial=trial_index,
                                     total_trials=total,
                                     elapsed_seconds=elapsed,
                                     duration_seconds=seconds,
@@ -311,7 +322,9 @@ class SGTService:
                         ):
                             raise InterruptedError("capture cancelled")
 
-                def run_unrecorded_stage(kind: str, gesture: str, target: float = 0.0) -> None:
+                def run_unrecorded_stage(
+                    kind: str, gesture: str, target: float = 0.0, trial_index: int = 0
+                ) -> None:
                     """Capture practice evidence without training labels.
 
                     The practice stage mirrors the recorded presentation prompt so
@@ -331,6 +344,7 @@ class SGTService:
                                 stage=kind,
                                 instruction=_stage_instruction(kind, gesture),
                                 stimulus_image=_stimulus_image(profile, gesture),
+                                trial=trial_index,
                                 total_trials=total,
                                 duration_seconds=profile.sgt.duration_seconds,
                                 activation=target,
@@ -364,6 +378,7 @@ class SGTService:
                                         stage=kind,
                                         instruction=_stage_instruction(kind, gesture),
                                         stimulus_image=_stimulus_image(profile, gesture),
+                                        trial=trial_index,
                                         total_trials=total,
                                         elapsed_seconds=elapsed,
                                         duration_seconds=profile.sgt.duration_seconds,
@@ -481,7 +496,9 @@ class SGTService:
                         while True:
                             if cancel.is_set():
                                 raise InterruptedError("capture cancelled")
-                            run_preparation(gesture, target)
+                            run_preparation(
+                                gesture, target, trial_index=recorded_presentation
+                            )
                             segment_sequence += 1
                             trial_index = recorded_presentation + 1
                             emit_presentation(gesture, trial_index, target, 0.0)
@@ -538,7 +555,14 @@ class SGTService:
             if runtime.controller.started:
                 runtime.controller.close(reason)
         if progress:
-            progress(SGTProgress(JobState.COMPLETED, total_trials=total, capture=output))
+            progress(
+                SGTProgress(
+                    JobState.COMPLETED,
+                    trial=total,
+                    total_trials=total,
+                    capture=output,
+                )
+            )
         return output
 
 

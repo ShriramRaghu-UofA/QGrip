@@ -45,10 +45,11 @@ afterEach(cleanup);
 test('all workflow stages are keyboard-accessible', async () => {
   const user = userEvent.setup();
   render(App);
-  for (const stage of ['Setup', 'Collect', 'Train', 'Validate', 'Handi']) {
+  for (const stage of ['Setup', 'Collect', 'Train', 'Validate']) {
     await user.click(screen.getByRole('button', { name: stage }));
     expect(screen.getByRole('heading', { name: stage, level: 2 })).toBeInTheDocument();
   }
+  expect(screen.queryByRole('button', { name: 'Handi' })).not.toBeInTheDocument();
 });
 
 test('theme selection persists', async () => {
@@ -147,6 +148,9 @@ test('SGT activation guidance remains visible during preparation', async () => {
           kind: 'sgt',
           stage: 'preparation',
           gesture: 'open',
+          trial: 2,
+          total_trials: 4,
+          progress: 0.5,
           activation: 0.75,
           measured_activation: 0.42,
           duration_seconds: 2,
@@ -169,6 +173,9 @@ test('SGT activation guidance remains visible during preparation', async () => {
   await waitFor(() => expect(screen.getByText('Next target')).toBeInTheDocument());
   expect(screen.getByText('75%')).toBeInTheDocument();
   expect(screen.getByText('42%')).toBeInTheDocument();
+  expect(screen.getByText('Session progress')).toBeInTheDocument();
+  expect(screen.getByText('50%')).toBeInTheDocument();
+  expect(screen.getByText('Get ready')).toBeInTheDocument();
 });
 
 test('live inference renders backend predictions', async () => {
