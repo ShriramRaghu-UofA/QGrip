@@ -1,11 +1,10 @@
 {
   "schema_version": 1,
-  "data_root": "data",
-  "assets_root": "assets/images",
+  "data_root": "../../data",
+  "assets_root": "../../assets/images",
   "device": {
-    "kind": "sifi",
-    "sample_rate_hz": 1000,
-    "imu_sample_rate_hz": 100,
+    "kind": "myo_ble",
+    "sample_rate_hz": 200,
     "channels": 8
   },
   "acquisition": {
@@ -26,14 +25,25 @@
     }
   },
   "sgt": {
-    "gestures": ["rest", "close", "open", "wrist_flexion", "wrist_extension"],
+    "gestures": [
+      "rest",
+      "close",
+      "open",
+      "wrist_flexion",
+      "wrist_extension"
+    ],
     "trials": 2,
     "duration_seconds": 4,
     "preparation_seconds": 3,
     "practice": true,
     "proportional": true,
     "progress_interval_seconds": 0.05,
-    "activation_levels": [0.25, 0.5, 0.75, 1.0],
+    "activation_levels": [
+      0.25,
+      0.5,
+      0.75,
+      1.0
+    ],
     "activation_tolerance": 0.1,
     "activation_smoothing_seconds": 0.1,
     "calibration_rest_seconds": 4,
@@ -57,14 +67,14 @@
     "activation_smoothing_threshold": 0.25,
     "activation_loss_weight": 1.0,
     "weight_decay": 0.0001,
-    "normalization": "dataset_standardize",
+    "normalization": "signed_8bit",
     "seed": 42,
     "export_onnx": true
   },
   "inference": {
-    "backend": "onnx",
+    "backend": "auto",
     "confidence_gate": 0.6,
-    "inference_period_seconds": 0.002,
+    "inference_period_seconds": 0.016666666666666666,
     "switch_predictions": 3,
     "idle_poll_seconds": 0.002,
     "maximum_wait_seconds": 0.01

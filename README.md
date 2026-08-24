@@ -31,7 +31,8 @@ validation. These instructions assume a source checkout on Windows with
    uv sync --locked --all-extras --dev
    ```
 
-2. Create a profile for your device. Use `synthetic` to try QGrip without hardware:
+2. Create a profile for your device. Bare filenames are created under `data/profiles/`.
+   Use `synthetic` to try QGrip without hardware:
 
    ```powershell
    uv run qgrip profile create synthetic.json --device synthetic

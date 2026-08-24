@@ -39,9 +39,18 @@ from qgrip.runtime.workflows import (
 )
 
 
+DEFAULT_PROFILE_DIR = Path("data/profiles")
+
+
+def _profile_path(value: str) -> Path:
+    """Resolve a bare profile filename against ``data/profiles``, leaving explicit paths alone."""
+    path = Path(value)
+    return DEFAULT_PROFILE_DIR / path if path.parent == Path(".") else path
+
+
 def _profile_argument(parser: argparse.ArgumentParser) -> None:
     """Add the required profile-file argument shared by profile-aware commands."""
-    parser.add_argument("--profile", type=Path, required=True)
+    parser.add_argument("--profile", type=_profile_path, required=True)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -57,20 +66,24 @@ def build_parser() -> argparse.ArgumentParser:
     profile = commands.add_parser("profile", help="create or inspect profiles")
     profile_commands = profile.add_subparsers(dest="profile_command", required=True)
     create = profile_commands.add_parser("create")
-    create.add_argument("path", type=Path)
+    create.add_argument(
+        "path",
+        type=_profile_path,
+        help="profile filename or path; bare filenames are created under data/profiles",
+    )
     create.add_argument(
         "--device", choices=["sifi", "myo_ble", "myo_dongle", "synthetic"], default="synthetic"
     )
     for name in ("validate", "show"):
         command = profile_commands.add_parser(name)
-        command.add_argument("path", type=Path)
+        command.add_argument("path", type=_profile_path)
 
     assets = commands.add_parser("assets", help="manage optional gesture images")
     assets_commands = assets.add_subparsers(dest="assets_command", required=True)
     download = assets_commands.add_parser("download", help="download LibEMG gesture images")
     download.add_argument("--target", type=Path)
     download.add_argument(
-        "--profile", type=Path, help="download only the gestures configured by this profile"
+        "--profile", type=_profile_path, help="download only the gestures configured by this profile"
     )
     download.add_argument(
         "--gesture",

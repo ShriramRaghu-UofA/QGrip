@@ -745,8 +745,8 @@ def default_profile(kind: DeviceKind | str = DeviceKind.SYNTHETIC) -> dict[str, 
         device["imu_sample_rate_hz"] = ImuConfiguration().sample_rate_hz
     return {
         "schema_version": 1,
-        "data_root": "data",
-        "assets_root": "assets/images",
+        "data_root": "../../data",
+        "assets_root": "../../assets/images",
         "device": device,
         "acquisition": {
             "ring_buffer_seconds": 10.0,

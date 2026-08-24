@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "data_root": "data",
-  "assets_root": "assets/images",
+  "data_root": "../../data",
+  "assets_root": "../../assets/images",
   "device": {
     "kind": "myo_ble",
     "sample_rate_hz": 200.0,
