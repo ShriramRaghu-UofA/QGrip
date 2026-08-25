@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import tempfile
 from dataclasses import asdict
 from enum import StrEnum
@@ -22,6 +23,7 @@ from sifi_streamer.sifi.sensor_profile import EmgConfiguration, ImuConfiguration
 
 from qgrip.core.domain import (
     DEFAULT_ACTIVATION_LEVELS,
+    LED_MATRIX_COLS,
     LED_MATRIX_PIXELS,
     AcquisitionConfig,
     DashboardConfig,
@@ -698,6 +700,37 @@ def profile_document(profile: QGripProfile) -> dict[str, object]:
     return cast(dict[str, object], document)
 
 
+#: Matches one `"led_frame": [...]` array as `json.dumps(..., indent=2)` renders
+#: it - one integer per line - so it can be re-wrapped into the physical grid.
+_LED_FRAME = re.compile(
+    r'("led_frame":\s*)\[\s*((?:-?\d+\s*,?\s*)*)\](?=,?\s*$)', re.DOTALL | re.MULTILINE
+)
+
+
+def _format_led_frames(payload: str) -> str:
+    """Re-wrap each `led_frame` array into an 8x13 grid mirroring the LED matrix.
+
+    ``json.dumps(indent=2)`` puts one pixel per line, which for a 104-value
+    frame is unreadable and gives no sense of the actual shape being displayed.
+    Wrapping it into `LED_MATRIX_ROWS` rows of `LED_MATRIX_COLS` values instead
+    makes the on-screen JSON look like the physical grid it drives.
+    """
+
+    def _grid(match: re.Match[str]) -> str:
+        prefix = match.group(1)
+        indent = re.search(r"[ \t]*$", match.string[: match.start()], re.MULTILINE).group(0)
+        values = [part.strip() for part in match.group(2).split(",") if part.strip()]
+        if not values:
+            return f"{prefix}[]"
+        rows = [
+            values[row : row + LED_MATRIX_COLS] for row in range(0, len(values), LED_MATRIX_COLS)
+        ]
+        body = ",\n".join(f"{indent}  " + ", ".join(row) for row in rows)
+        return f"{prefix}[\n{body}\n{indent}]"
+
+    return _LED_FRAME.sub(_grid, payload)
+
+
 def write_profile_atomic(profile: QGripProfile, output: str | Path) -> Path:
     """Validate and atomically replace ``output`` with a serialized profile.
 
@@ -707,7 +740,7 @@ def write_profile_atomic(profile: QGripProfile, output: str | Path) -> Path:
     """
     target = Path(output).expanduser().resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(profile_document(profile), indent=2) + "\n"
+    payload = _format_led_frames(json.dumps(profile_document(profile), indent=2)) + "\n"
     descriptor, temporary = tempfile.mkstemp(
         prefix=f".{target.name}.", suffix=".tmp", dir=target.parent
     )
