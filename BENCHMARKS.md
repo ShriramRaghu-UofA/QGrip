@@ -27,17 +27,17 @@ Benchmark command
 
 ---
 
-## ONNX throughput: CNN vs Transformer by device
+## ONNX latency: CNN vs Transformer by device
 
 ```mermaid
 
 %%{init: {'theme': 'dark'}}%%
 xychart
-    title "ONNX throughput: CNN vs Transformer (SiFi vs MYO)"
+    title "ONNX mean latency: CNN vs Transformer (SiFi vs MYO)"
     x-axis ["Myo CNN", "Myo Transformer", "SiFi CNN", "SiFi Transformer"]
-    y-axis "Predictions/sec" 0 --> 1200
-    bar "MYO" [1130.6, 434.6, 0, 0]
-    bar "SiFi" [0, 0, 430.5, 210.8]
+    y-axis "Latency (ms)" 0 --> 5
+    bar "MYO" [0.884, 2.301, 0, 0]
+    bar "SiFi" [0, 0, 2.323, 4.745]
 ```
 
 
