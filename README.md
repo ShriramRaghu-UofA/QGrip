@@ -189,6 +189,23 @@ Only one hardware-owning activity may run in a process. Stop CLI inference, a
 dashboard job, or the Handi runtime before starting another operation that uses the
 same device.
 
+#### Benchmark inference latency without a device
+
+`benchmark` measures per-call latency and throughput of a checkpoint's `predict`
+using synthetic random windows, so it needs no live EMG stream or profile:
+
+```powershell
+uv run qgrip benchmark data/demo/models/RUN/model.pt
+uv run qgrip benchmark data/demo/models/RUN/model.pt --backend torch --iterations 500 --json
+```
+
+It reports mean/median/p95/p99/min/max/stdev latency in milliseconds plus overall
+throughput in predictions/sec. `--warmup` (default 20) runs untimed predictions
+first so one-time backend setup (CUDA context, ONNX Runtime session, JIT) doesn't
+skew the timed iterations. `--backend` selects `auto` (default), `torch`, or `onnx`
+the same way `infer` does. `--json` prints a machine-readable result instead of the
+text summary.
+
 ### Installation groups
 
 The setup above installs every optional dependency. Smaller deployments can select

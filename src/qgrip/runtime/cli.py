@@ -22,7 +22,7 @@ from qgrip.capture.assets import (
 )
 from qgrip.capture.rpc import MessagePackRpcClient
 from qgrip.capture.streaming import LiveEMGSession, PredictionDebouncer, check_streamer_device
-from qgrip.core.domain import SGTRequest, TrainingRequest
+from qgrip.core.domain import BenchmarkResult, SGTRequest, TrainingRequest
 from qgrip.core.errors import QGripError, ValidationError
 from qgrip.core.profiles import (
     default_profile,
@@ -36,8 +36,8 @@ from qgrip.runtime.workflows import (
     InferenceService,
     SGTService,
     TrainingService,
+    run_inference_benchmark,
 )
-
 
 DEFAULT_PROFILE_DIR = Path("data/profiles")
 
@@ -50,7 +50,12 @@ def _profile_path(value: str) -> Path:
 
 def _profile_argument(parser: argparse.ArgumentParser) -> None:
     """Add the required profile-file argument shared by profile-aware commands."""
-    parser.add_argument("--profile", type=_profile_path, required=True)
+    parser.add_argument(
+        "--profile",
+        type=_profile_path,
+        required=True,
+        help="profile filename or path; bare filenames resolve under data/profiles",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -65,71 +70,160 @@ def build_parser() -> argparse.ArgumentParser:
 
     profile = commands.add_parser("profile", help="create or inspect profiles")
     profile_commands = profile.add_subparsers(dest="profile_command", required=True)
-    create = profile_commands.add_parser("create")
+    create = profile_commands.add_parser("create", help="write a new default profile to disk")
     create.add_argument(
         "path",
         type=_profile_path,
         help="profile filename or path; bare filenames are created under data/profiles",
     )
     create.add_argument(
-        "--device", choices=["sifi", "myo_ble", "myo_dongle", "synthetic"], default="synthetic"
+        "--device",
+        choices=["sifi", "myo_ble", "myo_dongle", "synthetic"],
+        default="synthetic",
+        help="EMG source the new profile targets (default: synthetic)",
     )
-    for name in ("validate", "show"):
-        command = profile_commands.add_parser(name)
-        command.add_argument("path", type=_profile_path)
+    validate = profile_commands.add_parser(
+        "validate", help="load a profile and report whether it is well-formed"
+    )
+    validate.add_argument("path", type=_profile_path, help="profile filename or path")
+    show = profile_commands.add_parser("show", help="print a profile's resolved JSON document")
+    show.add_argument("path", type=_profile_path, help="profile filename or path")
 
     assets = commands.add_parser("assets", help="manage optional gesture images")
     assets_commands = assets.add_subparsers(dest="assets_command", required=True)
     download = assets_commands.add_parser("download", help="download LibEMG gesture images")
-    download.add_argument("--target", type=Path)
     download.add_argument(
-        "--profile", type=_profile_path, help="download only the gestures configured by this profile"
+        "--target",
+        type=Path,
+        help="directory to save images into (default: profile's assets_root or assets/images)",
+    )
+    download.add_argument(
+        "--profile",
+        type=_profile_path,
+        help="download only the gestures configured by this profile",
     )
     download.add_argument(
         "--gesture",
         action="append",
         choices=tuple(GESTURE_ASSETS),
-        help="gesture to download; repeat to select multiple gestures",
+        help="gesture to download; repeat to select multiple gestures "
+        "(default: profile's gestures, or the built-in default set)",
     )
 
     sgt = commands.add_parser("sgt", help="run screen-guided capture")
-    sgt.add_argument("subject")
+    sgt.add_argument("subject", help="subject identifier; names the capture's output directory")
     _profile_argument(sgt)
-    sgt.add_argument("--discrete", action="store_true")
+    sgt.add_argument(
+        "--discrete",
+        action="store_true",
+        help="present only rest/hold prompts instead of proportional activation levels",
+    )
 
     calibration = commands.add_parser("sgt-calibrate", help="calibrate proportional SGT activation")
-    calibration.add_argument("subject")
+    calibration.add_argument(
+        "subject", help="subject identifier; names the calibration's output file"
+    )
     _profile_argument(calibration)
 
     export = commands.add_parser("export", help="derive Parquet from capture logs")
-    export.add_argument("subject")
-    export.add_argument("captures", nargs="*", type=Path)
+    export.add_argument("subject", help="subject identifier whose captures are exported")
+    export.add_argument(
+        "captures",
+        nargs="*",
+        type=Path,
+        help="capture log path(s) to export (default: the subject's latest capture)",
+    )
     _profile_argument(export)
 
-    train = commands.add_parser("train")
-    train.add_argument("subject")
+    train = commands.add_parser("train", help="train a classifier from exported capture data")
+    train.add_argument("subject", help="subject identifier whose exported data is used")
     _profile_argument(train)
-    train.add_argument("--input", action="append", type=Path, default=[])
-    train.add_argument("--model", choices=["transformer", "cnn1d", "cnn2d", "dense"])
-    train.add_argument("--discrete", action="store_true")
+    train.add_argument(
+        "--input",
+        action="append",
+        type=Path,
+        default=[],
+        help="Parquet file to include; repeat to combine multiple exports "
+        "(default: the subject's latest export)",
+    )
+    train.add_argument(
+        "--model",
+        choices=["transformer", "cnn1d", "cnn2d", "dense"],
+        help="model architecture to train (default: profile's model.name)",
+    )
+    train.add_argument(
+        "--discrete",
+        action="store_true",
+        help="train on rest/hold labels only, without a proportional activation target",
+    )
 
-    infer = commands.add_parser("infer")
-    infer.add_argument("model", type=Path)
+    infer = commands.add_parser("infer", help="run live inference against a streaming EMG device")
+    infer.add_argument(
+        "model", type=Path, help="path to a trained model checkpoint (.pt or .onnx)"
+    )
     _profile_argument(infer)
-    infer.add_argument("--once", action="store_true", help="print one prediction and exit")
+    infer.add_argument(
+        "--once", action="store_true", help="print one accepted prediction and exit"
+    )
 
-    web = commands.add_parser("web")
+    benchmark = commands.add_parser(
+        "benchmark",
+        help="measure inference latency/throughput on synthetic data (no device needed)",
+    )
+    benchmark.add_argument(
+        "model", type=Path, help="path to a trained model checkpoint (.pt or .onnx)"
+    )
+    benchmark.add_argument(
+        "--backend",
+        choices=["auto", "torch", "onnx"],
+        default="auto",
+        help="inference backend to benchmark (default: auto, prefers an adjacent ONNX artifact)",
+    )
+    benchmark.add_argument(
+        "--iterations",
+        type=int,
+        default=200,
+        help="number of timed predictions to run (default: 200)",
+    )
+    benchmark.add_argument(
+        "--warmup",
+        type=int,
+        default=20,
+        help="untimed predictions run first to prime backend setup (default: 20)",
+    )
+    benchmark.add_argument(
+        "--seed", type=int, default=0, help="RNG seed for synthetic input windows (default: 0)"
+    )
+    benchmark.add_argument(
+        "--json", action="store_true", help="print machine-readable JSON instead of a text summary"
+    )
+
+    web = commands.add_parser("web", help="launch the local dashboard web server")
     _profile_argument(web)
 
-    handi = commands.add_parser("handi")
+    handi = commands.add_parser("handi", help="standalone Handi robotic-hand runtime and setup")
     handi_commands = handi.add_subparsers(dest="handi_command", required=True)
-    run = handi_commands.add_parser("run", help="standalone UNO Q runtime")
+    run = handi_commands.add_parser(
+        "run", help="run inference and drive Handi continuously until stopped"
+    )
     _profile_argument(run)
-    run.add_argument("--model", type=Path, required=True)
-    calibrate = handi_commands.add_parser("calibrate")
+    run.add_argument(
+        "--model",
+        type=Path,
+        required=True,
+        help="path to a trained model checkpoint (.pt or .onnx)",
+    )
+    calibrate = handi_commands.add_parser(
+        "calibrate", help="verify or interactively edit a profile's Handi joint limits and grips"
+    )
     _profile_argument(calibrate)
-    calibrate.add_argument("--output", type=Path, required=True)
-    calibrate.add_argument("--controller")
+    calibrate.add_argument(
+        "--output", type=Path, required=True, help="path to write the calibrated profile to"
+    )
+    calibrate.add_argument(
+        "--controller",
+        help="controller identifier to use instead of the profile's configured one",
+    )
     calibrate.add_argument(
         "--interactive",
         action="store_true",
@@ -158,6 +252,25 @@ def _run_handi(args: argparse.Namespace) -> int:
         signal.signal(event, lambda _signum, _frame: runtime.stop())
     runtime.run()
     return 0
+
+
+def _print_benchmark_result(result: BenchmarkResult, *, as_json: bool) -> None:
+    """Print a completed inference benchmark as JSON or an aligned text summary."""
+    if as_json:
+        print(json.dumps(asdict(result), indent=2))
+        return
+    print(f"model:          {result.model_name}")
+    print(f"backend:        {result.backend}")
+    print(f"window shape:   ({result.window_size}, {result.channels})")
+    print(f"iterations:     {result.iterations} (+{result.warmup} warmup)")
+    print(f"latency mean:   {result.mean_ms:.3f} ms")
+    print(f"latency median: {result.median_ms:.3f} ms")
+    print(f"latency p95:    {result.p95_ms:.3f} ms")
+    print(f"latency p99:    {result.p99_ms:.3f} ms")
+    print(f"latency min:    {result.min_ms:.3f} ms")
+    print(f"latency max:    {result.max_ms:.3f} ms")
+    print(f"latency stdev:  {result.stdev_ms:.3f} ms")
+    print(f"throughput:     {result.throughput_hz:.1f} predictions/sec")
 
 
 def dispatch(args: argparse.Namespace) -> int:
@@ -189,6 +302,13 @@ def dispatch(args: argparse.Namespace) -> int:
         count = download_assets(target, gestures)
         print(f"ready: {count} gesture image(s) in {target.resolve()}")
         print(f"LibEMGGestures requests citation; see {LIBEMG_CITATION_URL}")
+        return 0
+    if args.command == "benchmark":
+        inference = InferenceService(args.model, args.backend)
+        result = run_inference_benchmark(
+            inference, iterations=args.iterations, warmup=args.warmup, seed=args.seed
+        )
+        _print_benchmark_result(result, as_json=args.json)
         return 0
     profile = load_profile(args.profile)
     if args.command == "doctor":

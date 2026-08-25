@@ -63,3 +63,12 @@ class AdapterTests(unittest.TestCase):
         )
         self.assertFalse(live.once)
         self.assertTrue(once.once)
+
+    def test_benchmark_takes_no_profile_and_has_defaults(self) -> None:
+        from qgrip.runtime.cli import build_parser
+
+        parsed = build_parser().parse_args(["benchmark", "model.pt"])
+        self.assertEqual(parsed.backend, "auto")
+        self.assertEqual(parsed.iterations, 200)
+        self.assertEqual(parsed.warmup, 20)
+        self.assertFalse(parsed.json)

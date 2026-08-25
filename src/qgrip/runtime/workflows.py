@@ -32,6 +32,7 @@ from qgrip.capture.streaming import (
     streamer_device_factory,
 )
 from qgrip.core.domain import (
+    BenchmarkResult,
     EpochMetric,
     JobState,
     JobStatus,
@@ -43,7 +44,7 @@ from qgrip.core.domain import (
     TrainingRequest,
     TrainingSummary,
 )
-from qgrip.core.errors import ArtifactError, BusyError, DeviceError
+from qgrip.core.errors import ArtifactError, BusyError, DeviceError, ValidationError
 
 ProgressCallback = Callable[[SGTProgress], None]
 
@@ -705,6 +706,45 @@ class InferenceService:
         if activation_output is not None:
             activation = float(np.clip(np.asarray(activation_output).reshape(-1)[0], 0, 1))
         return Prediction(gesture, confidence, activation, (time.perf_counter() - started) * 1000)
+
+
+def run_inference_benchmark(
+    inference: InferenceService, iterations: int = 200, warmup: int = 20, seed: int = 0
+) -> BenchmarkResult:
+    """Measure ``predict`` latency/throughput on synthetic windows, no hardware required.
+
+    Windows are random noise shaped to the checkpoint's ``(window_size, channels)`` —
+    sufficient for timing since ``predict`` does the same fixed-shape tensor work
+    regardless of input content. ``warmup`` iterations run first and are excluded
+    from the reported statistics so one-time backend setup doesn't skew them.
+    """
+    if iterations < 1:
+        raise ValidationError("benchmark iterations must be at least 1")
+    if warmup < 0:
+        raise ValidationError("benchmark warmup must not be negative")
+    rng = np.random.default_rng(seed)
+    shape = (inference.window_size, inference.channels)
+    windows = [rng.standard_normal(shape).astype(np.float32) for _ in range(warmup + iterations)]
+    for window in windows[:warmup]:
+        inference.predict(window)
+    latencies = np.array([inference.predict(window).latency_ms for window in windows[warmup:]])
+    total_seconds = latencies.sum() / 1000
+    return BenchmarkResult(
+        backend=inference.backend,
+        model_name=str(inference.metadata.get("model_name", "unknown")),
+        iterations=iterations,
+        warmup=warmup,
+        window_size=inference.window_size,
+        channels=inference.channels,
+        mean_ms=float(latencies.mean()),
+        median_ms=float(np.median(latencies)),
+        p95_ms=float(np.percentile(latencies, 95)),
+        p99_ms=float(np.percentile(latencies, 99)),
+        min_ms=float(latencies.min()),
+        max_ms=float(latencies.max()),
+        stdev_ms=float(latencies.std()),
+        throughput_hz=float(iterations / total_seconds) if total_seconds > 0 else float("inf"),
+    )
 
 
 class WorkflowCoordinator:

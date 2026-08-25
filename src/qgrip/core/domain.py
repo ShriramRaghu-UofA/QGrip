@@ -458,6 +458,31 @@ class Prediction:
 
 
 @dataclass(frozen=True, slots=True)
+class BenchmarkResult:
+    """Latency and throughput distribution from repeated offline inference calls.
+
+    Latencies are milliseconds per :meth:`InferenceService.predict` call, excluding
+    ``warmup`` iterations run beforehand to prime lazy backend initialization
+    (CUDA context, ONNX Runtime session, JIT) so they don't skew the distribution.
+    """
+
+    backend: str
+    model_name: str
+    iterations: int
+    warmup: int
+    window_size: int
+    channels: int
+    mean_ms: float
+    median_ms: float
+    p95_ms: float
+    p99_ms: float
+    min_ms: float
+    max_ms: float
+    stdev_ms: float
+    throughput_hz: float
+
+
+@dataclass(frozen=True, slots=True)
 class LiveSignalHealth:
     """QGrip wire-safe summary of streamer device and consumer health."""
 

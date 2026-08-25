@@ -25,6 +25,7 @@ from qgrip.core.domain import (
     SGTRequest,
     TrainingRequest,
 )
+from qgrip.core.errors import ValidationError
 from qgrip.core.profiles import load_profile
 from qgrip.runtime.workflows import (
     CalibrationService,
@@ -35,6 +36,7 @@ from qgrip.runtime.workflows import (
     TrainingService,
     WorkflowCoordinator,
     _valid_emg_rows,
+    run_inference_benchmark,
 )
 from tests.helpers import write_profile
 
@@ -200,6 +202,21 @@ class SyntheticWorkflowTests(unittest.TestCase):
                 self.assertIsNotNone(coordinator.status.prediction)
             finally:
                 coordinator.close()
+
+            benchmark = run_inference_benchmark(inference, iterations=10, warmup=2)
+            self.assertEqual(benchmark.model_name, "dense")
+            self.assertEqual(benchmark.iterations, 10)
+            self.assertEqual(benchmark.warmup, 2)
+            self.assertEqual(benchmark.window_size, inference.window_size)
+            self.assertEqual(benchmark.channels, inference.channels)
+            self.assertGreater(benchmark.mean_ms, 0)
+            self.assertGreaterEqual(benchmark.p99_ms, benchmark.p95_ms)
+            self.assertGreaterEqual(benchmark.p95_ms, benchmark.median_ms)
+            self.assertGreater(benchmark.throughput_hz, 0)
+            with self.assertRaises(ValidationError):
+                run_inference_benchmark(inference, iterations=0)
+            with self.assertRaises(ValidationError):
+                run_inference_benchmark(inference, warmup=-1)
 
     def test_discrete_model_returns_full_activation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
