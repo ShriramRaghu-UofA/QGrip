@@ -218,7 +218,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _profile_argument(calibrate)
     calibrate.add_argument(
-        "--output", type=Path, required=True, help="path to write the calibrated profile to"
+        "--output",
+        type=_profile_path,
+        required=True,
+        help="path to write the calibrated profile to; bare filenames resolve under data/profiles",
     )
     calibrate.add_argument(
         "--controller",
