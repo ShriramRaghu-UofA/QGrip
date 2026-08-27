@@ -189,7 +189,10 @@ inference cadence, confidence gate, and debounce setting, and prints only accept
 predictions. With `inference.backend` set to `auto`, inference prefers an adjacent
 ONNX artifact and falls back to Torch if the artifact or ONNX Runtime cannot be
 loaded. `torch` forces the checkpoint backend; `onnx` requires the adjacent ONNX
-artifact and fails instead of falling back.
+artifact and fails instead of falling back. `inference.device_preference` selects
+`cpu` or `gpu`. A GPU preference uses CUDA for Torch and ONNX Runtime's
+`CUDAExecutionProvider` when available, and safely falls back to CPU on machines
+without GPU support. A CPU preference always forces the CPU provider.
 
 Only one hardware-owning activity may run in a process. Stop CLI inference, a
 dashboard job, the Handi runtime, or the HID joystick runtime before starting
@@ -203,6 +206,7 @@ using synthetic random windows, so it needs no live EMG stream or profile:
 ```powershell
 uv run qgrip benchmark data/demo/models/RUN/model.pt
 uv run qgrip benchmark data/demo/models/RUN/model.pt --backend torch --iterations 500 --json
+uv run qgrip benchmark data/demo/models/RUN/model.pt --backend onnx --device cpu
 ```
 
 It reports mean/median/p95/p99/min/max/stdev latency in milliseconds plus overall
@@ -210,7 +214,10 @@ throughput in predictions/sec. `--warmup` (default 20) runs untimed predictions
 first so one-time backend setup (CUDA context, ONNX Runtime session, JIT) doesn't
 skew the timed iterations. `--backend` selects `auto` (default), `torch`, or `onnx`
 the same way `infer` does. `--json` prints a machine-readable result instead of the
-text summary.
+text summary. `--device` accepts `cpu` or `gpu`; the result records the device that
+was actually used, so a requested GPU that is unavailable is reported as CPU. The
+dashboard's Validate stage runs the same benchmark on CPU and also charts each CUDA
+backend available on the current computer.
 
 ### Installation groups
 
@@ -240,7 +247,11 @@ from qgrip.capture.streaming import LiveEMGSession, PredictionDebouncer, sample_
 from qgrip.runtime.workflows import InferenceService
 
 profile = load_profile("profile.json")
-model = InferenceService("data/demo/models/RUN/model.pt", profile.inference.backend)
+model = InferenceService(
+    "data/demo/models/RUN/model.pt",
+    profile.inference.backend,
+    profile.inference.device_preference,
+)
 
 with LiveEMGSession(profile.device, profile.acquisition) as session:
     if session.channels != model.channels:
@@ -309,6 +320,11 @@ Each service reads only its own nested section: SGT reads `sgt` and `acquisition
 training reads `training` and `model`, and live inference, Handi, and the HID
 joystick runtime read `inference` and `acquisition` alongside the device and model
 artifacts.
+
+The `inference.device_preference` field is either `"cpu"` or `"gpu"`. It is a
+preference rather than a hardware requirement: `"gpu"` falls back to CPU when CUDA
+is unavailable (including Arduino-class deployments), while `"cpu"` prevents either
+Torch or ONNX Runtime from selecting a GPU provider.
 
 Paths in a profile are resolved relative to the profile file, not the current working
 directory. `schema_version` is mandatory and must be exactly `1`; unknown keys and

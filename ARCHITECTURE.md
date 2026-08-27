@@ -77,7 +77,8 @@ The sections have distinct owners:
 - `sgt` defines gesture order, trials, preparation/practice timing, and UI update cadence.
 - `model` selects one architecture and only its allowed architecture parameters.
 - `training` controls windowing, STFT, activation estimation, optimization, and export.
-- `inference` controls backend policy, cadence, confidence gating, and debounce.
+- `inference` controls backend and CPU/GPU preference policy, cadence, confidence
+  gating, and debounce.
 - `dashboard` controls the local server bind address and port.
 - `handi`, when present, defines the Router socket, verified joints, grip presets, step
   size, and gesture-to-action mapping.
@@ -222,9 +223,11 @@ requested model path is `.onnx`. Backend policy is:
 
 - `auto`: prefer adjacent ONNX; fall back to Torch if it is absent or cannot load;
 - `onnx`: require ONNX and fail if it cannot load; and
-- `torch`: load the checkpoint on CUDA when available, otherwise CPU.
+- `torch`: load the checkpoint using the profile's CPU/GPU preference.
 
-The ONNX adapter prefers CUDA when that provider is installed. Both backends accept the
+For both backends, a GPU preference selects CUDA when available and falls back to CPU;
+a CPU preference forces CPU even on GPU hosts. ONNX uses `CUDAExecutionProvider` only
+when it is installed. Both backends accept the
 same `(samples, channels)` raw-EMG contract because preprocessing is embedded in the model.
 `InferenceService.predict()` keeps a model-sized history and left-pads an incomplete direct
 call with zeros. Production live paths instead wait for a complete contiguous
@@ -237,6 +240,10 @@ agreement through `PredictionDebouncer` before accepting a gesture switch. Dashb
 Handi additionally reject a live stream whose nominal sample rate differs from checkpoint
 metadata.
 
+Offline benchmarking reports the backend and actual compute device alongside latency
+percentiles and throughput. The dashboard benchmarks every loadable backend on CPU and
+adds its GPU result only when that backend actually acquires a CUDA provider.
+
 ## Dashboard and HTTP boundary
 
 The installed wheel contains compiled Svelte assets, so Node is not a runtime dependency.
@@ -246,7 +253,8 @@ because custom headers are unavailable there. Tokens use constant-time compariso
 bodies larger than 1 MiB are rejected.
 
 The dashboard API exposes device probing, artifact discovery, SGT control, export, training,
-and inference operations under `/api/v1`. The coordinator's latest `JobStatus` is the
+inference, and offline benchmarking operations under `/api/v1`. The coordinator's latest
+`JobStatus` is the
 authoritative state. One authenticated SSE connection emits:
 
 - `status`, a complete snapshot consumers must apply; and

@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
-    import curses
+    from curses import window as CursesWindow
+else:
+    CursesWindow = object
 
 from qgrip.capture.rpc import MessagePackRpcClient
 from qgrip.capture.streaming import LiveEMGSession, PredictionDebouncer, sample_rates_match
@@ -241,7 +243,7 @@ def _get_position(rpc: MotorRpc, joint_id: int) -> tuple[int | None, str | None]
         result = rpc.call("get_position", joint_id)
     except RpcError as exc:
         return None, f"get_position failed: {exc}"
-    if not result or int(result[0]) < 0:
+    if not isinstance(result, (list, tuple)) or not result or int(result[0]) < 0:
         return None, f"get_position({joint_id}) rejected by MCU"
     return int(result[0]), None
 
@@ -297,7 +299,7 @@ def _retract_others(
 
 
 def _calibrate_endpoint(
-    stdscr: "curses._CursesWindow",
+    stdscr: CursesWindow,
     rpc: MotorRpc,
     joint_id: int,
     joint_name: str,
@@ -357,7 +359,7 @@ def _calibrate_endpoint(
 
 
 def _calibrate_motor(
-    stdscr: "curses._CursesWindow",
+    stdscr: CursesWindow,
     rpc: MotorRpc,
     joints: dict[str, JointLimit],
     joint_name: str,
@@ -410,7 +412,7 @@ def _calibrate_motor(
 
 
 def _list_menu(
-    stdscr: "curses._CursesWindow",
+    stdscr: CursesWindow,
     title: str,
     subtitle: str,
     items: list[tuple[int, str]],
@@ -442,7 +444,7 @@ def _list_menu(
             return None
 
 
-def _motor_menu(stdscr: "curses._CursesWindow", joints: dict[str, JointLimit]) -> str | None:
+def _motor_menu(stdscr: CursesWindow, joints: dict[str, JointLimit]) -> str | None:
     """Arrow-key list of joints. Returns the chosen joint name, or None to quit."""
     names = list(joints)
     chosen_index = _list_menu(
@@ -454,7 +456,7 @@ def _motor_menu(stdscr: "curses._CursesWindow", joints: dict[str, JointLimit]) -
     return None if chosen_index is None else names[chosen_index]
 
 
-def _grip_menu(stdscr: "curses._CursesWindow", grips: dict[str, GripPreset]) -> str | None:
+def _grip_menu(stdscr: CursesWindow, grips: dict[str, GripPreset]) -> str | None:
     """Arrow-key list of grip presets. Returns the chosen grip name, or None to quit."""
     names = list(grips)
     chosen_index = _list_menu(
@@ -467,7 +469,7 @@ def _grip_menu(stdscr: "curses._CursesWindow", grips: dict[str, GripPreset]) -> 
 
 
 def _grip_digit_menu(
-    stdscr: "curses._CursesWindow", grip_name: str, joint_names: list[str]
+    stdscr: CursesWindow, grip_name: str, joint_names: list[str]
 ) -> str | None:
     """Arrow-key list of joints, scoped to one preset. Returns joint name, or None."""
     chosen_index = _list_menu(
@@ -480,7 +482,7 @@ def _grip_digit_menu(
 
 
 def _calibrate_grip_digit(
-    stdscr: "curses._CursesWindow",
+    stdscr: CursesWindow,
     controller: HandController,
     grip_name: str,
     joint_name: str,
@@ -539,7 +541,7 @@ def _calibrate_grip_digit(
 
 
 def _calibrate_grip(
-    stdscr: "curses._CursesWindow",
+    stdscr: CursesWindow,
     controller: HandController,
     grips: dict[str, GripPreset],
     grip_name: str,
@@ -580,7 +582,7 @@ _MENU_GRIP_SHAPES = 2
 
 
 def _wizard_main(
-    stdscr: "curses._CursesWindow",
+    stdscr: CursesWindow,
     rpc: MotorRpc,
     controller: HandController,
     joints: dict[str, JointLimit],
@@ -690,7 +692,9 @@ class HandiRuntime:
         if profile.handi is None or not profile.handi.enabled:
             raise ValidationError("profile does not enable Handi")
         self.profile = profile
-        self.model = InferenceService(model, profile.inference.backend)
+        self.model = InferenceService(
+            model, profile.inference.backend, profile.inference.device_preference
+        )
         config = profile.handi
         self.controller = HandController(
             config, rpc_factory(config.rpc_socket, config.rpc_timeout_seconds)

@@ -22,7 +22,7 @@ from qgrip.capture.assets import (
 )
 from qgrip.capture.rpc import MessagePackRpcClient
 from qgrip.capture.streaming import LiveEMGSession, PredictionDebouncer, check_streamer_device
-from qgrip.core.domain import BenchmarkResult, SGTRequest, TrainingRequest
+from qgrip.core.domain import BenchmarkResult, ComputePreference, SGTRequest, TrainingRequest
 from qgrip.core.errors import QGripError, ValidationError
 from qgrip.core.profiles import (
     default_profile,
@@ -181,6 +181,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="inference backend to benchmark (default: auto, prefers an adjacent ONNX artifact)",
     )
     benchmark.add_argument(
+        "--device",
+        choices=tuple(ComputePreference),
+        default=ComputePreference.GPU,
+        help="preferred compute device; GPU falls back to CPU when unavailable (default: gpu)",
+    )
+    benchmark.add_argument(
         "--iterations",
         type=int,
         default=200,
@@ -301,6 +307,7 @@ def _print_benchmark_result(result: BenchmarkResult, *, as_json: bool) -> None:
         return
     print(f"model:          {result.model_name}")
     print(f"backend:        {result.backend}")
+    print(f"device:         {result.device}")
     print(f"window shape:   ({result.window_size}, {result.channels})")
     print(f"iterations:     {result.iterations} (+{result.warmup} warmup)")
     print(f"latency mean:   {result.mean_ms:.3f} ms")
@@ -344,7 +351,7 @@ def dispatch(args: argparse.Namespace) -> int:
         print(f"LibEMGGestures requests citation; see {LIBEMG_CITATION_URL}")
         return 0
     if args.command == "benchmark":
-        inference = InferenceService(args.model, args.backend)
+        inference = InferenceService(args.model, args.backend, args.device)
         result = run_inference_benchmark(
             inference, iterations=args.iterations, warmup=args.warmup, seed=args.seed
         )
@@ -381,7 +388,9 @@ def dispatch(args: argparse.Namespace) -> int:
         )
         print(TrainingService().train(request, threading.Event()))
     elif args.command == "infer":
-        inference = InferenceService(args.model, profile.inference.backend)
+        inference = InferenceService(
+            args.model, profile.inference.backend, profile.inference.device_preference
+        )
         with LiveEMGSession(profile.device, profile.acquisition) as session:
             if session.channels != inference.channels:
                 raise ValidationError("model channel count does not match live EMG stream")

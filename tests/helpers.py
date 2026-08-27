@@ -60,6 +60,7 @@ def write_profile(root: Path, *, handi: bool = False) -> Path:
         },
         "inference": {
             "backend": "auto",
+            "device_preference": "gpu",
             "confidence_gate": 0,
             "inference_period_seconds": 0.01,
             "switch_predictions": 1,

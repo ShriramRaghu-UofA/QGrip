@@ -26,6 +26,7 @@ from qgrip.core.domain import (
     LED_MATRIX_COLS,
     LED_MATRIX_PIXELS,
     AcquisitionConfig,
+    ComputePreference,
     DashboardConfig,
     DeviceConfig,
     DeviceKind,
@@ -517,6 +518,7 @@ def _parse_inference(raw: object) -> InferenceConfig:
         data,
         {
             "backend",
+            "device_preference",
             "confidence_gate",
             "inference_period_seconds",
             "switch_predictions",
@@ -528,11 +530,17 @@ def _parse_inference(raw: object) -> InferenceConfig:
     backend = _enum(
         data.get("backend", InferenceBackend.AUTO), InferenceBackend, "inference.backend"
     )
+    device_preference = _enum(
+        data.get("device_preference", ComputePreference.GPU),
+        ComputePreference,
+        "inference.device_preference",
+    )
     gate = _finite(data.get("confidence_gate", 0.6), "inference.confidence_gate")
     if not 0 <= gate <= 1:
         raise ValidationError("inference.confidence_gate must be between 0 and 1")
     return InferenceConfig(
         backend,
+        device_preference,
         gate,
         _finite(
             data.get("inference_period_seconds", 1 / 60),
@@ -718,7 +726,8 @@ def _format_led_frames(payload: str) -> str:
 
     def _grid(match: re.Match[str]) -> str:
         prefix = match.group(1)
-        indent = re.search(r"[ \t]*$", match.string[: match.start()], re.MULTILINE).group(0)
+        indent_match = re.search(r"[ \t]*$", match.string[: match.start()], re.MULTILINE)
+        indent = indent_match.group(0) if indent_match is not None else ""
         values = [part.strip() for part in match.group(2).split(",") if part.strip()]
         if not values:
             return f"{prefix}[]"
@@ -845,6 +854,7 @@ def default_profile(kind: DeviceKind | str = DeviceKind.SYNTHETIC) -> dict[str, 
         },
         "inference": {
             "backend": "auto",
+            "device_preference": "gpu",
             "confidence_gate": 0.6,
             "inference_period_seconds": 1 / 60,
             "switch_predictions": 3,

@@ -29,7 +29,7 @@ from qgrip.core.domain import (
 )
 from qgrip.core.errors import ArtifactError, QGripError
 from qgrip.core.profiles import load_profile
-from qgrip.runtime.workflows import WorkflowCoordinator
+from qgrip.runtime.workflows import WorkflowCoordinator, run_inference_benchmark_suite
 
 
 def notification_for(status: JobStatus) -> dict[str, object] | None:
@@ -87,6 +87,15 @@ class InferenceWire(WireModel):
     model: str
 
 
+class BenchmarkWire(WireModel):
+    """Request an offline CPU/GPU benchmark suite for one checkpoint."""
+
+    model: str
+    iterations: int = Field(default=200, ge=1, le=10_000)
+    warmup: int = Field(default=20, ge=0, le=1_000)
+    seed: int = 0
+
+
 def create_app(
     profile: QGripProfile | str | Path,
     *,
@@ -141,6 +150,7 @@ def create_app(
             "models": list(ModelName),
             "proportional": current.sgt.proportional,
             "activation_tolerance": current.sgt.activation_tolerance,
+            "device_preference": current.inference.device_preference,
         }
 
     @app.get("/api/v1/doctor", dependencies=protected)
@@ -266,6 +276,14 @@ def create_app(
     def start_inference(body: InferenceWire) -> dict[str, object]:
         """Start exclusive live inference for the selected artifact."""
         return asdict(owner.start_inference(Path(body.model).resolve(), current))
+
+    @app.post("/api/v1/benchmark", dependencies=protected)
+    def benchmark(body: BenchmarkWire) -> dict[str, object]:
+        """Measure all loadable inference backends on CPU and available GPU providers."""
+        results = run_inference_benchmark_suite(
+            Path(body.model).resolve(), body.iterations, body.warmup, body.seed
+        )
+        return {"results": [asdict(result) for result in results]}
 
     @app.post("/api/v1/server/stop", dependencies=protected)
     def server_stop() -> dict[str, bool]:

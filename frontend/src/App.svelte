@@ -2,6 +2,8 @@
   import { onMount } from 'svelte';
   import type {
     ArtifactList,
+    BenchmarkResult,
+    BenchmarkSuite,
     Bootstrap,
     DoctorReport,
     JobStatus,
@@ -9,6 +11,7 @@
     Prediction,
   } from './api';
   import { QGripApi } from './api';
+  import BenchmarkPlot from './BenchmarkPlot.svelte';
   import MetricPlot from './MetricPlot.svelte';
   import StagePanel from './StagePanel.svelte';
 
@@ -29,6 +32,8 @@
   let trainingInput = $state('');
   let modelPath = $state('');
   let predictionHistory = $state.raw<Prediction[]>([]);
+  let benchmarkResults = $state.raw<BenchmarkResult[]>([]);
+  let benchmarking = $state(false);
   let error = $state('');
   let online = $state(true);
 
@@ -224,6 +229,30 @@
     } finally {
       checkingDevice = false;
     }
+  }
+
+  /** Benchmark CPU and each available GPU provider for the selected checkpoint. */
+  async function runBenchmark(): Promise<void> {
+    benchmarking = true;
+    benchmarkResults = [];
+    try {
+      const suite = await api.request<BenchmarkSuite>('/api/v1/benchmark', {
+        method: 'POST',
+        body: JSON.stringify({ model: modelPath }),
+      });
+      benchmarkResults = suite.results;
+      error = '';
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : String(cause);
+    } finally {
+      benchmarking = false;
+    }
+  }
+
+  /** Select a checkpoint and discard benchmark results for the previous model. */
+  function chooseCheckpoint(value: string): void {
+    modelPath = value;
+    benchmarkResults = [];
   }
 
   /** Replace local state with an authoritative status snapshot and derive UI updates. */
@@ -585,7 +614,36 @@
         </StagePanel>
       {:else}
         <StagePanel title="Validate" description="Inspect class, confidence, activation, signal health, and end-to-end latency." active>
-          <select class="select w-full" bind:value={modelPath} aria-label="Inference checkpoint"><option value="">Select a checkpoint</option>{#each artifacts.filter((path) => path.endsWith('.pt')) as path (path)}<option value={path}>{path}</option>{/each}</select>
+          <select class="select w-full" value={modelPath} onchange={(event) => chooseCheckpoint(event.currentTarget.value)} aria-label="Inference checkpoint"><option value="">Select a checkpoint</option>{#each artifacts.filter((path) => path.endsWith('.pt')) as path (path)}<option value={path}>{path}</option>{/each}</select>
+          <div class="card border border-base-300 bg-base-100">
+            <div class="card-body gap-4">
+              <div class="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 class="card-title text-lg">Inference benchmark</h3>
+                  <p class="text-sm text-base-content/70">Compare ONNX Runtime and Torch on CPU, plus CUDA providers when this computer has them.</p>
+                  <span class="badge badge-outline mt-2">Live preference: {(bootstrap?.device_preference ?? 'gpu').toUpperCase()}</span>
+                </div>
+                <button class="btn btn-secondary" disabled={!modelPath || benchmarking || status.state === 'running'} onclick={() => void runBenchmark()}>
+                  {#if benchmarking}<span class="loading loading-spinner loading-sm"></span> Benchmarking…{:else}Run benchmark{/if}
+                </button>
+              </div>
+              {#if benchmarkResults.length}
+                <BenchmarkPlot results={benchmarkResults} />
+                <div class="overflow-x-auto">
+                  <table class="table table-sm">
+                    <thead><tr><th>Runtime</th><th>Device</th><th class="text-right">Median</th><th class="text-right">p95</th><th class="text-right">p99</th><th class="text-right">Throughput</th></tr></thead>
+                    <tbody>
+                      {#each benchmarkResults as result (`${result.backend}-${result.device}`)}
+                        <tr><td class="uppercase">{result.backend}</td><td class="uppercase"><span class={['badge', result.device === 'gpu' ? 'badge-accent' : 'badge-ghost']}>{result.device}</span></td><td class="text-right">{result.median_ms.toFixed(3)} ms</td><td class="text-right">{result.p95_ms.toFixed(3)} ms</td><td class="text-right">{result.p99_ms.toFixed(3)} ms</td><td class="text-right">{result.throughput_hz.toFixed(1)}/s</td></tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+              {:else if !benchmarking}
+                <p class="text-sm text-base-content/60">Select a checkpoint and run a hardware-local benchmark. No EMG device is required.</p>
+              {/if}
+            </div>
+          </div>
           <div class="stats stats-vertical bg-base-300 sm:stats-horizontal"><div class="stat"><div class="stat-title">Class</div><div class="stat-value">{status.prediction?.gesture ?? '—'}</div></div><div class="stat"><div class="stat-title">Confidence</div><div class="stat-value text-success">{status.prediction ? `${Math.round(status.prediction.confidence * 100)}%` : '—'}</div></div><div class="stat"><div class="stat-title">Activation</div><div class="stat-value">{status.prediction ? `${Math.round(status.prediction.activation * 100)}%` : '—'}</div></div><div class="stat"><div class="stat-title">Latency</div><div class="stat-value">{status.prediction ? status.prediction.latency_ms.toFixed(1) : '—'} ms</div></div></div>
           {#if status.health}
             <div class={[

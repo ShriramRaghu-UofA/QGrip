@@ -72,6 +72,13 @@ class InferenceBackend(StrEnum):
     ONNX = "onnx"
 
 
+class ComputePreference(StrEnum):
+    """Preferred inference compute device with graceful CPU fallback."""
+
+    CPU = "cpu"
+    GPU = "gpu"
+
+
 class NormalizationMode(StrEnum):
     """Raw-EMG scaling strategy embedded in the trained model graph."""
 
@@ -248,12 +255,14 @@ class TrainingConfig:
 class InferenceConfig:
     """Live inference backend, cadence, confidence gate, and switch debounce.
 
+    ``device_preference`` forces CPU or prefers GPU with CPU fallback.
     Predictions below ``confidence_gate`` are treated as ``rest`` by live
     adapters. A changed gesture must persist for ``switch_predictions`` model
     outputs before it is accepted. Poll/wait values control stream consumption.
     """
 
     backend: InferenceBackend = InferenceBackend.AUTO
+    device_preference: ComputePreference = ComputePreference.GPU
     confidence_gate: float = 0.6
     inference_period_seconds: float = 1 / 60
     switch_predictions: int = 3
@@ -467,6 +476,7 @@ class BenchmarkResult:
     """
 
     backend: str
+    device: ComputePreference
     model_name: str
     iterations: int
     warmup: int

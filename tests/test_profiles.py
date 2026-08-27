@@ -6,7 +6,7 @@ from pathlib import Path
 
 from sifi_streamer.sifi.sensor_profile import ImuConfiguration
 
-from qgrip.core.domain import NormalizationMode
+from qgrip.core.domain import ComputePreference, NormalizationMode
 from qgrip.core.errors import ValidationError
 from qgrip.core.profiles import load_profile, write_profile_atomic
 from tests.helpers import write_profile
@@ -27,6 +27,20 @@ class ProfileTests(unittest.TestCase):
             profile = load_profile(write_profile(Path(directory)))
             self.assertEqual(profile.inference.inference_period_seconds, 0.01)
             self.assertEqual(profile.inference.switch_predictions, 1)
+            self.assertEqual(profile.inference.device_preference, ComputePreference.GPU)
+
+    def test_inference_compute_preference_is_strict(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_profile(Path(directory))
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["inference"]["device_preference"] = "cpu"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            self.assertEqual(load_profile(path).inference.device_preference, ComputePreference.CPU)
+
+            document["inference"]["device_preference"] = "neural_engine"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaisesRegex(ValidationError, "device_preference"):
+                load_profile(path)
 
     def test_training_configuration_is_loaded_from_the_profile(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

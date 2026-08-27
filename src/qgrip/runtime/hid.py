@@ -161,7 +161,9 @@ class HidRuntime:
     ) -> None:
         """Construct the runtime and load the checkpoint; open no hardware yet."""
         self.profile = profile
-        self.model = InferenceService(model, profile.inference.backend)
+        self.model = InferenceService(
+            model, profile.inference.backend, profile.inference.device_preference
+        )
         self.controller = JoystickController(device)
         self._stop = threading.Event()
         self._closed = False

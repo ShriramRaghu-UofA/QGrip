@@ -33,6 +33,7 @@ from qgrip.capture.streaming import (
 )
 from qgrip.core.domain import (
     BenchmarkResult,
+    ComputePreference,
     EpochMetric,
     JobState,
     JobStatus,
@@ -608,7 +609,12 @@ class TrainingService:
 class InferenceService:
     """Stateful streaming inference using a self-describing Torch or ONNX model."""
 
-    def __init__(self, model: str | Path, backend: str = "auto") -> None:
+    def __init__(
+        self,
+        model: str | Path,
+        backend: str = "auto",
+        device_preference: ComputePreference | str = ComputePreference.GPU,
+    ) -> None:
         """Load strict checkpoint metadata and the requested Torch or ONNX backend."""
         self.path = Path(model).resolve()
         try:
@@ -635,6 +641,12 @@ class InferenceService:
         except (OSError, RuntimeError, ValueError, KeyError) as exc:
             raise ArtifactError(f"unsupported checkpoint {checkpoint_path}: {exc}") from exc
         requested_backend = backend
+        try:
+            preference = ComputePreference(device_preference)
+        except ValueError as exc:
+            raise ArtifactError(
+                f"unsupported compute device preference: {device_preference}"
+            ) from exc
         onnx_path = checkpoint_path.with_suffix(".onnx")
         automatic = requested_backend == "auto"
         if requested_backend == "auto":
@@ -643,18 +655,33 @@ class InferenceService:
             if not onnx_path.exists():
                 raise ArtifactError(f"ONNX model not found beside checkpoint: {onnx_path}")
             try:
-                self._onnx_model = ONNXEMGClassifier(onnx_path, prefer_cuda=True)
+                self._onnx_model = ONNXEMGClassifier(
+                    onnx_path, prefer_cuda=preference == ComputePreference.GPU
+                )
             except (ImportError, OSError, RuntimeError) as exc:
                 if not automatic:
                     raise ArtifactError(f"cannot load ONNX model {onnx_path}: {exc}") from exc
                 requested_backend = "torch"
         if requested_backend == "torch":
-            torch_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            use_cuda = preference == ComputePreference.GPU and torch.cuda.is_available()
+            torch_device = torch.device("cuda" if use_cuda else "cpu")
             self._torch_model, self.metadata = load_model_checkpoint(checkpoint_path, torch_device)
             self._torch_device = torch_device
         elif requested_backend != "onnx":
             raise ArtifactError(f"unsupported inference backend: {backend}")
         self.backend = requested_backend
+        if self._onnx_model is not None:
+            self.device = (
+                ComputePreference.GPU
+                if self._onnx_model.providers[0] == "CUDAExecutionProvider"
+                else ComputePreference.CPU
+            )
+        else:
+            self.device = (
+                ComputePreference.GPU
+                if self._torch_device.type == "cuda"
+                else ComputePreference.CPU
+            )
         self.window_size = int(model_config["window_size"])
         self.channels = int(model_config["n_channels"])
         labels = self.metadata.get("labels")
@@ -727,6 +754,7 @@ def run_inference_benchmark(
     total_seconds = latencies.sum() / 1000
     return BenchmarkResult(
         backend=inference.backend,
+        device=inference.device,
         model_name=str(inference.metadata.get("model_name", "unknown")),
         iterations=iterations,
         warmup=warmup,
@@ -741,6 +769,29 @@ def run_inference_benchmark(
         stdev_ms=float(latencies.std()),
         throughput_hz=float(iterations / total_seconds) if total_seconds > 0 else float("inf"),
     )
+
+
+def run_inference_benchmark_suite(
+    model: str | Path, iterations: int = 200, warmup: int = 20, seed: int = 0
+) -> tuple[BenchmarkResult, ...]:
+    """Benchmark every loadable backend on CPU and on an actually available GPU."""
+    checkpoint = Path(model).resolve()
+    if checkpoint.suffix == ".onnx":
+        checkpoint = checkpoint.with_suffix(".pt")
+    backends = ["torch"]
+    if checkpoint.with_suffix(".onnx").exists():
+        backends.insert(0, "onnx")
+    results: list[BenchmarkResult] = []
+    for backend in backends:
+        cpu = InferenceService(checkpoint, backend, ComputePreference.CPU)
+        results.append(run_inference_benchmark(cpu, iterations, warmup, seed))
+        try:
+            gpu = InferenceService(checkpoint, backend, ComputePreference.GPU)
+        except ArtifactError:
+            continue
+        if gpu.device == ComputePreference.GPU:
+            results.append(run_inference_benchmark(gpu, iterations, warmup, seed))
+    return tuple(results)
 
 
 class WorkflowCoordinator:
@@ -935,7 +986,9 @@ class WorkflowCoordinator:
 
     def start_inference(self, model: Path, profile: QGripProfile) -> JobStatus:
         """Start exclusive live inference after stream/checkpoint identity validation."""
-        inference = InferenceService(model, profile.inference.backend)
+        inference = InferenceService(
+            model, profile.inference.backend, profile.inference.device_preference
+        )
 
         def run() -> str:
             """Own live stream consumption until cancellation and surface health snapshots."""

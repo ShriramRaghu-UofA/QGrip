@@ -37,6 +37,7 @@ from qgrip.runtime.workflows import (
     WorkflowCoordinator,
     _valid_emg_rows,
     run_inference_benchmark,
+    run_inference_benchmark_suite,
 )
 from tests.helpers import write_profile
 
@@ -209,6 +210,7 @@ class SyntheticWorkflowTests(unittest.TestCase):
             self.assertEqual(benchmark.warmup, 2)
             self.assertEqual(benchmark.window_size, inference.window_size)
             self.assertEqual(benchmark.channels, inference.channels)
+            self.assertIn(benchmark.device, {"cpu", "gpu"})
             self.assertGreater(benchmark.mean_ms, 0)
             self.assertGreaterEqual(benchmark.p99_ms, benchmark.p95_ms)
             self.assertGreaterEqual(benchmark.p95_ms, benchmark.median_ms)
@@ -217,6 +219,12 @@ class SyntheticWorkflowTests(unittest.TestCase):
                 run_inference_benchmark(inference, iterations=0)
             with self.assertRaises(ValidationError):
                 run_inference_benchmark(inference, warmup=-1)
+
+            cpu_inference = InferenceService(checkpoint, "torch", "cpu")
+            self.assertEqual(cpu_inference.device, "cpu")
+            suite = run_inference_benchmark_suite(checkpoint, iterations=2, warmup=0)
+            self.assertIn(("onnx", "cpu"), {(item.backend, item.device) for item in suite})
+            self.assertIn(("torch", "cpu"), {(item.backend, item.device) for item in suite})
 
     def test_discrete_model_returns_full_activation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

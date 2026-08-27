@@ -10,6 +10,7 @@ export interface Bootstrap {
   models: string[];
   proportional: boolean;
   activation_tolerance: number;
+  device_preference: 'cpu' | 'gpu';
 }
 
 /** Authoritative, replace-not-patch snapshot broadcast on the status SSE channel. */
@@ -53,6 +54,30 @@ export interface Prediction {
   confidence: number;
   activation: number;
   latency_ms: number;
+}
+
+/** One backend/device latency distribution from an offline benchmark run. */
+export interface BenchmarkResult {
+  backend: string;
+  device: 'cpu' | 'gpu';
+  model_name: string;
+  iterations: number;
+  warmup: number;
+  window_size: number;
+  channels: number;
+  mean_ms: number;
+  median_ms: number;
+  p95_ms: number;
+  p99_ms: number;
+  min_ms: number;
+  max_ms: number;
+  stdev_ms: number;
+  throughput_hz: number;
+}
+
+/** Complete benchmark-suite response for a selected checkpoint. */
+export interface BenchmarkSuite {
+  results: BenchmarkResult[];
 }
 
 /** Metrics recorded after a complete training epoch. */

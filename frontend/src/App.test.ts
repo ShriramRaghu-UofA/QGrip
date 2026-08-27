@@ -234,3 +234,43 @@ test('live inference renders backend predictions', async () => {
   expect(screen.getByText(/Device loss: 3/)).toBeInTheDocument();
   expect(screen.getByText(/consumer overruns: 1/)).toBeInTheDocument();
 });
+
+test('benchmark renders CPU and available GPU comparisons', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      let body: object = {
+        api_version: 1,
+        profile: 'synthetic.json',
+        device: 'synthetic',
+        device_preference: 'gpu',
+        gestures: ['rest', 'open'],
+        models: ['dense'],
+        proportional: true,
+        activation_tolerance: 0.1,
+      };
+      if (path.includes('/api/v1/artifacts')) body = { artifacts: ['C:/data/model.pt'], calibration_ready: false };
+      if (path.includes('/api/v1/benchmark'))
+        body = {
+          results: [
+            { backend: 'onnx', device: 'cpu', model_name: 'dense', iterations: 200, warmup: 20, window_size: 200, channels: 8, mean_ms: 1.2, median_ms: 1.1, p95_ms: 1.5, p99_ms: 1.6, min_ms: 1, max_ms: 1.7, stdev_ms: 0.1, throughput_hz: 833.3 },
+            { backend: 'onnx', device: 'gpu', model_name: 'dense', iterations: 200, warmup: 20, window_size: 200, channels: 8, mean_ms: 0.4, median_ms: 0.3, p95_ms: 0.5, p99_ms: 0.6, min_ms: 0.2, max_ms: 0.7, stdev_ms: 0.05, throughput_hz: 2500 },
+          ],
+        };
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }),
+  );
+  const user = userEvent.setup();
+  render(App);
+  await user.click(screen.getByRole('button', { name: 'Validate' }));
+  const benchmark = screen.getByRole('button', { name: 'Run benchmark' });
+  await waitFor(() => expect(benchmark).toBeEnabled());
+  await user.click(benchmark);
+  await waitFor(() => expect(screen.getByText('2500.0/s')).toBeInTheDocument());
+  expect(screen.getByLabelText('Benchmark latency percentile plot')).toBeInTheDocument();
+  expect(screen.getAllByText(/gpu/i).length).toBeGreaterThan(0);
+});

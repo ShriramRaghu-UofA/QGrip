@@ -1,9 +1,12 @@
 import tempfile
 import unittest
+from dataclasses import asdict
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from qgrip.core.domain import BenchmarkResult, ComputePreference
 from qgrip.runtime.api import create_app, notification_for
 from qgrip.runtime.cli import main
 from tests.helpers import write_profile
@@ -71,4 +74,41 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(parsed.backend, "auto")
         self.assertEqual(parsed.iterations, 200)
         self.assertEqual(parsed.warmup, 20)
+        self.assertEqual(parsed.device, "gpu")
         self.assertFalse(parsed.json)
+
+    def test_dashboard_benchmark_exposes_backend_device_results(self) -> None:
+        result = BenchmarkResult(
+            backend="onnx",
+            device=ComputePreference.CPU,
+            model_name="dense",
+            iterations=10,
+            warmup=2,
+            window_size=200,
+            channels=8,
+            mean_ms=1.2,
+            median_ms=1.1,
+            p95_ms=1.5,
+            p99_ms=1.6,
+            min_ms=1.0,
+            max_ms=1.7,
+            stdev_ms=0.1,
+            throughput_hz=833.3,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            app = create_app(write_profile(Path(directory)), token="secret")
+            with (
+                patch(
+                    "qgrip.runtime.api.run_inference_benchmark_suite",
+                    return_value=(result,),
+                ) as benchmark,
+                TestClient(app) as client,
+            ):
+                response = client.post(
+                    "/api/v1/benchmark",
+                    headers={"X-QGrip-Token": "secret"},
+                    json={"model": "model.pt", "iterations": 10, "warmup": 2},
+                )
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), {"results": [asdict(result)]})
+            benchmark.assert_called_once()
