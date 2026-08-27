@@ -1,7 +1,7 @@
 # QGrip
 
 QGrip is a typed Python 3.14 application for collecting EMG data, training and
-validating gesture models, and safely controlling a Handi hand through the Arduino
+validating gesture models, and controlling a Handi hand through the Arduino
 UNO Q Router. It includes an installable FastAPI/Svelte dashboard and a completely
 standalone UNO Q runtime.
 
@@ -22,6 +22,9 @@ data collection and guides you through setup, capture, export, training, and liv
 validation. These instructions assume a source checkout on Windows with
 [Python 3.14 or newer](https://www.python.org/downloads/) and
 [`uv`](https://docs.astral.sh/uv/getting-started/installation/) installed.
+
+![Dashboard](images/QGripDashboard.png)
+
 
 ### Web app (recommended)
 
@@ -86,6 +89,7 @@ validation. These instructions assume a source checkout on Windows with
 
    Open the complete printed URL, including `?token=...`, in a browser. Keep the
    terminal running while using QGrip; press `Ctrl+C` there when you are finished.
+
 
 7. Complete the workflow in the web app:
 
@@ -421,6 +425,9 @@ unversioned checkpoints are rejected rather than guessed or migrated.
 
 ## Standalone Handi
 
+
+![QGrip](images/qgripsolo.gif)
+
 ```powershell
 uv run qgrip-rpc-handi --profile handi.json --model data/demo/models/RUN/model.pt
 ```
@@ -466,6 +473,35 @@ Every motor command is clamped to configured joint limits. Each `set_positions` 
 call carries an ordered position for every configured joint; an incremental multi-joint
 open/close action currently sends one such call per joint. Stopping QGrip commands does
 not disable servo torque and does not replace a physical emergency stop.
+
+## Performance summary table on Arduino UNO Q
+
+| Model | Dataset | Backend | Window | Mean latency | P95 latency | Throughput |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| CNN | MYO | ONNX | (200, 8) | 0.884 ms | 1.050 ms | 1130.6 pred/s |
+| CNN | MYO | Torch | (200, 8) | 5.196 ms | 5.562 ms | 192.5 pred/s |
+| CNN | SiFi | ONNX | (1000, 8) | 2.323 ms | 2.729 ms | 430.5 pred/s |
+| CNN | SiFi | Torch | (1000, 8) | 8.101 ms | 10.186 ms | 123.4 pred/s |
+| Transformer | MYO | ONNX | (200, 8) | 2.301 ms | 2.633 ms | 434.6 pred/s |
+| Transformer | MYO | Torch | (200, 8) | 14.418 ms | 16.829 ms | 69.4 pred/s |
+| Transformer | SiFi | ONNX | (1000, 8) | 4.745 ms | 7.818 ms | 210.8 pred/s |
+| Transformer | SiFi | Torch | (1000, 8) | 17.115 ms | 21.978 ms | 58.4 pred/s |
+
+---
+
+## ONNX latency: CNN vs Transformer by device
+
+```mermaid
+
+%%{init: {'theme': 'dark'}}%%
+xychart
+    title "ONNX mean latency: CNN vs Transformer (SiFi vs MYO)"
+    x-axis ["Myo CNN", "Myo Transformer", "SiFi CNN", "SiFi Transformer"]
+    y-axis "Latency (ms)" 0 --> 5
+    bar "MYO" [0.884, 2.301, 0, 0]
+    bar "SiFi" [0, 0, 2.323, 4.745]
+```
+
 
 ## Standalone HID joystick
 
