@@ -43,6 +43,7 @@ LOGGER = logging.getLogger("qgrip.runtime.hid")
 #: Logical Maximum (127) / Minimum (-127). Replace with a per-gesture calibrated
 #: value once the classifier reports a measured amplitude instead of a class.
 AXIS_MAX = 127
+AXIS_MIN = -127
 
 #: Wire format written to the HID gadget: X, Y, Z, buttons (one byte each).
 HIDG_REPORT_LENGTH = 4
@@ -55,6 +56,8 @@ AXIS_NAMES = ("X", "Y", "Z")
 LABEL_TO_AXIS: dict[str, tuple[int, int]] = {
     "open": (0, AXIS_MAX),
     "close": (1, AXIS_MAX),
+    "wrist_flexion":(2, AXIS_MAX),
+    "wrist_extension":(2, AXIS_MIN),
 }
 
 
