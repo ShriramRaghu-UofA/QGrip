@@ -1,5 +1,8 @@
 # 🖐️ QGrip — App Lab app
 
+![Wiring](../../images/qgripsolo.gif)
+
+
 This is the on-board App Lab App: a sketch on the UNO Q's STM32 (MCU side) that
 drives a Handi Hand's 6 digit joints, plus a thin Python RPC layer
 (`python/main.py`) that exposes the sketch's Router Bridge calls to the rest of
@@ -44,6 +47,9 @@ sweep of the bus and brings up each servo it finds; a DYNAMIXEL joint missing at
 boot is re-pinged in the background every ~2 s and comes online when it responds.
 
 ## Wiring
+
+![Wiring](../../images/qgrip2schematic_bGnMZHbH6r.png)
+
 
 ### DYNAMIXEL bus (no shield, no TTL adapter)
 
