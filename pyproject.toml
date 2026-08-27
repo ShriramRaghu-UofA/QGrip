@@ -41,6 +41,7 @@ handi = [
 [project.scripts]
 qgrip = "qgrip.runtime.cli:main"
 qgrip-rpc-handi = "qgrip.runtime.handi:main"
+qgrip-hid = "qgrip.runtime.hid:main"
 
 [dependency-groups]
 dev = [

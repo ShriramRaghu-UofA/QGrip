@@ -31,6 +31,7 @@ from qgrip.core.profiles import (
     write_profile_atomic,
 )
 from qgrip.runtime.handi import HandiRuntime, run_interactive
+from qgrip.runtime.hid import LABEL_TO_AXIS, HidRuntime
 from qgrip.runtime.workflows import (
     CalibrationService,
     InferenceService,
@@ -233,6 +234,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="launch a curses wizard to jog joints to their extend/flex endpoints "
         "and edit grip presets by hand, instead of just re-validating the profile",
     )
+
+    hid = commands.add_parser(
+        "hid",
+        help="run inference and drive a USB HID joystick axis continuously until stopped",
+    )
+    _profile_argument(hid)
+    hid.add_argument(
+        "--model",
+        type=Path,
+        required=True,
+        help="path to a trained model checkpoint (.pt or .onnx)",
+    )
+    hid.add_argument(
+        "--device",
+        type=Path,
+        default=Path("/dev/hidg1"),
+        help="HID gadget device node to write joystick reports to (default: /dev/hidg1)",
+    )
     return parser
 
 
@@ -250,6 +269,24 @@ def _run_handi(args: argparse.Namespace) -> int:
         dict(config.gesture_mapping),
         config.joints,
         {item.name: item.minimum for item in config.joints},
+    )
+    for event in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(event, lambda _signum, _frame: runtime.stop())
+    runtime.run()
+    return 0
+
+
+def _run_hid(args: argparse.Namespace) -> int:
+    """Own the foreground HID-joystick runtime and signal-driven shutdown."""
+    profile = load_profile(args.profile)
+    runtime = HidRuntime(profile, str(args.model), device=args.device)
+    logging.getLogger("qgrip.runtime.hid").info(
+        "device=%s model=%s labels=%s axis_map=%s hid=%s",
+        profile.device,
+        runtime.model.metadata.get("model_name"),
+        runtime.model.labels,
+        dict(LABEL_TO_AXIS),
+        args.device,
     )
     for event in (signal.SIGINT, signal.SIGTERM):
         signal.signal(event, lambda _signum, _frame: runtime.stop())
@@ -394,6 +431,8 @@ def dispatch(args: argparse.Namespace) -> int:
         )
     elif args.command == "handi" and args.handi_command == "run":
         return _run_handi(args)
+    elif args.command == "hid":
+        return _run_hid(args)
     elif args.command == "handi" and args.handi_command == "calibrate":
         if profile.handi is None:
             raise ValidationError("profile has no Handi configuration")

@@ -186,8 +186,8 @@ loaded. `torch` forces the checkpoint backend; `onnx` requires the adjacent ONNX
 artifact and fails instead of falling back.
 
 Only one hardware-owning activity may run in a process. Stop CLI inference, a
-dashboard job, or the Handi runtime before starting another operation that uses the
-same device.
+dashboard job, the Handi runtime, or the HID joystick runtime before starting
+another operation that uses the same device.
 
 #### Benchmark inference latency without a device
 
@@ -221,8 +221,9 @@ only the groups they need:
 
 For example, a training workstation that uses SiFi and ONNX can run
 `uv sync --locked --extra train --extra onnx`; an UNO Q Handi deployment normally
-needs `train`, `onnx`, and `handi`. The `--all-extras --dev` form remains the simplest
-source-development setup.
+needs `train`, `onnx`, and `handi`. The standalone HID joystick runtime writes to a
+USB HID gadget instead of the Router, so it needs `train` and `onnx` but not `handi`.
+The `--all-extras --dev` form remains the simplest source-development setup.
 
 ## Use real-time inference from Python
 
@@ -295,7 +296,8 @@ repository; PyoMyo itself is not installed.
 
 Profiles are the editable configuration boundary for QGrip. They compose device,
 acquisition, SGT, model, training, inference, dashboard, and optional Handi settings;
-the CLI, dashboard, and standalone Handi runtime use the same loaded profile. QGrip
+the CLI, dashboard, and the standalone Handi and HID joystick runtimes use the same
+loaded profile. QGrip
 does not select or copy an implicit profile; create one explicitly, then edit it before
 running a workflow:
 
@@ -305,8 +307,9 @@ qgrip profile create profile.json --device synthetic
 
 Replace `synthetic` with `sifi`, `myo_ble`, or `myo_dongle` as appropriate.
 Each service reads only its own nested section: SGT reads `sgt` and `acquisition`,
-training reads `training` and `model`, and live inference/Handi read `inference` and
-`acquisition` alongside the device and model artifacts.
+training reads `training` and `model`, and live inference, Handi, and the HID
+joystick runtime read `inference` and `acquisition` alongside the device and model
+artifacts.
 
 Paths in a profile are resolved relative to the profile file, not the current working
 directory. `schema_version` is mandatory and must be exactly `1`; unknown keys and
@@ -463,6 +466,37 @@ Every motor command is clamped to configured joint limits. Each `set_positions` 
 call carries an ordered position for every configured joint; an incremental multi-joint
 open/close action currently sends one such call per joint. Stopping QGrip commands does
 not disable servo torque and does not replace a physical emergency stop.
+
+## Standalone HID joystick
+
+```powershell
+uv run qgrip-hid --profile synthetic.json --model data/demo/models/RUN/model.pt
+```
+
+`qgrip hid` — aliased as the `qgrip-hid` console script — is the standalone
+Handi runtime with a different output stage. Acquisition, model loading, the
+windowed inference loop, the confidence gate, and prediction debounce are
+identical; each accepted prediction is mapped to a signed deflection on one axis
+of a USB HID game controller instead of a clamped joint pose over the Arduino
+Router RPC socket.
+
+Reports are written to a HID gadget device (`--device`, default `/dev/hidg1`) as
+a 4-byte `[X, Y, Z, buttons]` packet. Each mapped gesture drives its own axis —
+`open` → X, `close` → Y — scaled between zero and full scale (±127) by the
+prediction's proportional `activation`. `rest`, and any gesture with no axis
+mapping, sends the neutral all-zero report that recentres the stick. The current
+report is re-sent every `inference.inference_period_seconds` tick, so a sustained
+contraction reads as a held deflection rather than a single tap. On `Ctrl+C`,
+`SIGTERM`, or any error the neutral report is written once more before the device
+is closed.
+
+The axis assignment and full-scale value are the `LABEL_TO_AXIS` and `AXIS_MAX`
+constants in `qgrip.runtime.hid`; `AXIS_MAX` is a placeholder until the classifier
+reports a per-gesture calibrated maximum. The HID gadget device itself (the
+joystick `hidg` function) is configured on the host outside QGrip. Like the other
+hardware-owning runtimes, the command validates checkpoint/device channel count
+and sample rate before streaming, and only one such activity may run in a process
+at a time.
 
 ## Gesture images
 
