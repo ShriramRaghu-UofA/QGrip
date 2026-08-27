@@ -159,13 +159,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     infer = commands.add_parser("infer", help="run live inference against a streaming EMG device")
-    infer.add_argument(
-        "model", type=Path, help="path to a trained model checkpoint (.pt or .onnx)"
-    )
+    infer.add_argument("model", type=Path, help="path to a trained model checkpoint (.pt or .onnx)")
     _profile_argument(infer)
-    infer.add_argument(
-        "--once", action="store_true", help="print one accepted prediction and exit"
-    )
+    infer.add_argument("--once", action="store_true", help="print one accepted prediction and exit")
 
     benchmark = commands.add_parser(
         "benchmark",

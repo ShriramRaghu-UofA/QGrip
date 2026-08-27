@@ -190,9 +190,7 @@ class HandController:
                 0.0,
                 min(1.0, self.state.openness + direction * self.config.openness_step * activation),
             )
-            grip = next(
-                (item for item in self.config.grips if item.name == self.state.grip), None
-            )
+            grip = next((item for item in self.config.grips if item.name == self.state.grip), None)
             if grip is None:
                 # No grip is active yet - there's no preset target to blend toward, so
                 # open/close has nothing to do but track openness for the next apply_grip.
@@ -388,9 +386,7 @@ def _calibrate_motor(
     current = joints[joint_name]
     start_pos, _error = _get_position(rpc, joint_id)
     start_pos = start_pos if start_pos is not None else round(current.minimum)
-    outcome, minimum_pos = _calibrate_endpoint(
-        stdscr, rpc, joint_id, joint_name, False, start_pos
-    )
+    outcome, minimum_pos = _calibrate_endpoint(stdscr, rpc, joint_id, joint_name, False, start_pos)
     if outcome == "quit":
         return False
     if outcome != "saved":
@@ -398,9 +394,7 @@ def _calibrate_motor(
 
     start_pos, _error = _get_position(rpc, joint_id)
     start_pos = start_pos if start_pos is not None else round(current.maximum)
-    outcome, maximum_pos = _calibrate_endpoint(
-        stdscr, rpc, joint_id, joint_name, True, start_pos
-    )
+    outcome, maximum_pos = _calibrate_endpoint(stdscr, rpc, joint_id, joint_name, True, start_pos)
     if outcome == "quit":
         return False
     if outcome != "saved":
@@ -468,9 +462,7 @@ def _grip_menu(stdscr: CursesWindow, grips: dict[str, GripPreset]) -> str | None
     return None if chosen_index is None else names[chosen_index]
 
 
-def _grip_digit_menu(
-    stdscr: CursesWindow, grip_name: str, joint_names: list[str]
-) -> str | None:
+def _grip_digit_menu(stdscr: CursesWindow, grip_name: str, joint_names: list[str]) -> str | None:
     """Arrow-key list of joints, scoped to one preset. Returns joint name, or None."""
     chosen_index = _list_menu(
         stdscr,

@@ -318,9 +318,7 @@ class SyntheticWorkflowTests(unittest.TestCase):
             self.calibrate(profile, "s")
             progress: list[SGTProgress] = []
             SGTService().run(SGTRequest("s", profile, False), threading.Event(), progress.append)
-            prep_trials = [
-                item.trial for item in progress if item.stage == "preparation"
-            ]
+            prep_trials = [item.trial for item in progress if item.stage == "preparation"]
             self.assertTrue(len(prep_trials) > 0)
             # Later preparation periods must reflect already completed presentations.
             self.assertTrue(max(prep_trials) > 0)

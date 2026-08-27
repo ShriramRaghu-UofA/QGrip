@@ -282,9 +282,7 @@ class SGTService:
                     """Return the held target for one stepped presentation."""
                     return 0.0 if gesture == "rest" else target
 
-                def run_preparation(
-                    gesture: str, target: float, trial_index: int = 0
-                ) -> None:
+                def run_preparation(gesture: str, target: float, trial_index: int = 0) -> None:
                     """Give the operator a brief get-ready countdown before a prompt.
 
                     The preparation period paces the transition into practice
@@ -498,9 +496,7 @@ class SGTService:
                         while True:
                             if cancel.is_set():
                                 raise InterruptedError("capture cancelled")
-                            run_preparation(
-                                gesture, target, trial_index=recorded_presentation
-                            )
+                            run_preparation(gesture, target, trial_index=recorded_presentation)
                             segment_sequence += 1
                             trial_index = recorded_presentation + 1
                             emit_presentation(gesture, trial_index, target, 0.0)

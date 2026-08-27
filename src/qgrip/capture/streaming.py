@@ -211,9 +211,7 @@ def streamer_device_factory(config: DeviceConfig) -> DeviceFactory:
     """Return a picklable factory used only by a streamer-owned worker."""
     if config.kind == DeviceKind.SIFI:
         if config.imu_sample_rate_hz is None:
-            raise DeviceError(
-                f"device.imu_sample_rate_hz must be set for {config.kind}"
-            )
+            raise DeviceError(f"device.imu_sample_rate_hz must be set for {config.kind}")
         profile = replace(
             EMG_IMU_PROFILE,
             emg=replace(EMG_IMU_PROFILE.emg, sample_rate_hz=round(config.sample_rate_hz)),

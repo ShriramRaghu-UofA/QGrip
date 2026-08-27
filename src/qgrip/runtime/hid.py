@@ -56,8 +56,8 @@ AXIS_NAMES = ("X", "Y", "Z")
 LABEL_TO_AXIS: dict[str, tuple[int, int]] = {
     "open": (0, AXIS_MAX),
     "close": (1, AXIS_MAX),
-    "wrist_flexion":(2, AXIS_MAX),
-    "wrist_extension":(2, AXIS_MIN),
+    "wrist_flexion": (2, AXIS_MAX),
+    "wrist_extension": (2, AXIS_MIN),
 }
 
 
