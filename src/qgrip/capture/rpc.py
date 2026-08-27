@@ -96,7 +96,7 @@ class MessagePackRpcClient:
         try:
             import msgpack
         except ImportError as exc:
-            raise RpcError("install QGrip with the 'handi' extra for MessagePack RPC") from exc
+            raise RpcError("QGrip installation is missing MessagePack RPC support") from exc
         connection = self._socket
         if connection is None:
             raise RpcError("RPC client is not connected")

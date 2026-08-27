@@ -20,7 +20,7 @@ artifacts, inference, or hardware control.
 ## Required validation
 
 ```powershell
-uv sync --locked --all-extras --dev
+uv sync --locked
 uv run ruff check .
 uv run ruff format --check .
 uv run ty check

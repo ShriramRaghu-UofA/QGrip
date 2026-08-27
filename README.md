@@ -30,10 +30,10 @@ validation. These instructions assume a source checkout on Windows with
 
 ### Web app (recommended)
 
-1. Install QGrip and all optional features from the repository root:
+1. Install QGrip and its development tools from the repository root:
 
    ```powershell
-   uv sync --locked --all-extras --dev
+   uv sync --locked
    ```
 
 2. Create a profile for your device. Bare filenames are created under `data/profiles/`.
@@ -214,22 +214,15 @@ text summary.
 
 ### Installation groups
 
-The setup above installs every optional dependency. Smaller deployments can select
-only the groups they need:
+QGrip has two dependency sets:
 
-| Group        | Needed for                                                                                   |
-|--------------|----------------------------------------------------------------------------------------------|
-| base package | profiles, SiFi/synthetic acquisition, capture/export, CLI, and dashboard                     |
-| `train`      | Torch training and Torch-backed inference                                                    |
-| `onnx`       | ONNX Runtime inference; use with `train` because checkpoint metadata is loaded through Torch |
-| `myo`        | Myo BLE or USB-dongle transports                                                             |
-| `handi`      | MessagePack RPC to the UNO Q Arduino Router                                                  |
+| Group        | Needed for |
+|--------------|------------|
+| base package | all QGrip runtime features, including acquisition, training, ONNX inference, Myo, Handi, the CLI, and the dashboard |
+| `dev`        | source-development tools such as Ruff and ty |
 
-For example, a training workstation that uses SiFi and ONNX can run
-`uv sync --locked --extra train --extra onnx`; an UNO Q Handi deployment normally
-needs `train`, `onnx`, and `handi`. The standalone HID joystick runtime writes to a
-USB HID gadget instead of the Router, so it needs `train` and `onnx` but not `handi`.
-The `--all-extras --dev` form remains the simplest source-development setup.
+`uv sync --locked` installs the base package and the default `dev` group for source
+development. Use `uv sync --locked --no-dev` when only the base package is needed.
 
 ## Use real-time inference from Python
 

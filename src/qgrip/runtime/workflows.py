@@ -586,7 +586,7 @@ def _stimulus_image(profile: QGripProfile, gesture: str) -> str | None:
 
 
 class TrainingService:
-    """Lazy facade keeping Torch optional until training is requested."""
+    """Lazy facade importing Torch only when training is requested."""
 
     def train(
         self,
@@ -599,9 +599,7 @@ class TrainingService:
         try:
             from qgrip.ml.training import TorchTrainingService
         except ImportError as exc:
-            raise ArtifactError(
-                "training requires the qgrip train extra: uv sync --extra train"
-            ) from exc
+            raise ArtifactError("QGrip installation is missing training dependencies") from exc
         return TorchTrainingService(request.profile.training).train(
             request, cancel, metric, summary
         )
@@ -623,9 +621,7 @@ class InferenceService:
                 load_model_checkpoint,
             )
         except ImportError as exc:
-            raise ArtifactError(
-                "inference requires the qgrip train extra: uv sync --extra train"
-            ) from exc
+            raise ArtifactError("QGrip installation is missing inference dependencies") from exc
         self._torch = torch
         self._torch_model: Any | None = None
         self._onnx_model: ONNXEMGClassifier | None = None

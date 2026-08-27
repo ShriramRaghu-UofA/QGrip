@@ -968,36 +968,26 @@ name = "qgrip"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "bleak" },
     { name = "fastapi" },
     { name = "httpx" },
-    { name = "numpy" },
-    { name = "pyarrow" },
-    { name = "pydantic" },
-    { name = "sifi-streamer" },
-    { name = "uvicorn" },
-]
-
-[package.optional-dependencies]
-handi = [
     { name = "msgpack" },
-]
-myo = [
-    { name = "bleak" },
-    { name = "pyserial" },
-]
-onnx = [
+    { name = "numpy" },
+    { name = "onnx" },
     { name = "onnxruntime", marker = "(platform_machine != 'AMD64' and platform_machine != 'x86_64' and sys_platform == 'linux') or (platform_machine != 'AMD64' and platform_machine != 'x86_64' and sys_platform == 'win32') or (sys_platform != 'linux' and sys_platform != 'win32')" },
     { name = "onnxruntime-gpu", marker = "(platform_machine == 'AMD64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')" },
     { name = "onnxruntime-qnn", marker = "platform_machine == 'ARM64' or platform_machine == 'aarch64'" },
-]
-train = [
-    { name = "onnx" },
     { name = "onnxscript" },
     { name = "pandas" },
+    { name = "pyarrow" },
+    { name = "pydantic" },
+    { name = "pyserial" },
     { name = "scikit-learn" },
+    { name = "sifi-streamer" },
     { name = "torch", version = "2.13.0", source = { registry = "https://pypi.org/simple" }, marker = "(platform_machine == 'ARM64' and sys_platform == 'win32') or (platform_machine == 'aarch64' and sys_platform == 'win32') or (sys_platform != 'linux' and sys_platform != 'win32')" },
     { name = "torch", version = "2.13.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine == 'ARM64' and sys_platform == 'linux') or (platform_machine == 'aarch64' and sys_platform == 'linux')" },
     { name = "torch", version = "2.13.0+cu132", source = { registry = "https://download.pytorch.org/whl/cu132" }, marker = "(platform_machine != 'ARM64' and platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_machine != 'ARM64' and platform_machine != 'aarch64' and sys_platform == 'win32')" },
+    { name = "uvicorn" },
 ]
 
 [package.dev-dependencies]
@@ -1008,28 +998,27 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "bleak", marker = "extra == 'myo'", specifier = ">=3.0.2" },
+    { name = "bleak", specifier = ">=3.0.2" },
     { name = "fastapi", specifier = ">=0.141.1,<1" },
     { name = "httpx", specifier = ">=0.28.1,<1" },
-    { name = "msgpack", marker = "extra == 'handi'", specifier = ">=1.1,<2" },
+    { name = "msgpack", specifier = ">=1.1,<2" },
     { name = "numpy", specifier = ">=2.3,<3" },
-    { name = "onnx", marker = "extra == 'train'", specifier = ">=1.18,<2" },
-    { name = "onnxruntime", marker = "(platform_machine != 'AMD64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'onnx') or (platform_machine != 'AMD64' and platform_machine != 'x86_64' and sys_platform == 'win32' and extra == 'onnx') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'onnx')", specifier = ">=1.29.0" },
-    { name = "onnxruntime-gpu", marker = "(platform_machine == 'AMD64' and sys_platform == 'linux' and extra == 'onnx') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'onnx') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'onnx') or (platform_machine == 'x86_64' and sys_platform == 'win32' and extra == 'onnx')", specifier = ">=1.29.0" },
-    { name = "onnxruntime-qnn", marker = "(platform_machine == 'ARM64' and extra == 'onnx') or (platform_machine == 'aarch64' and extra == 'onnx')", specifier = ">=2.4.0" },
-    { name = "onnxscript", marker = "extra == 'train'", specifier = ">=0.7.1" },
-    { name = "pandas", marker = "extra == 'train'", specifier = ">=3.0.5" },
+    { name = "onnx", specifier = ">=1.18,<2" },
+    { name = "onnxruntime", marker = "(platform_machine != 'AMD64' and platform_machine != 'x86_64' and sys_platform == 'linux') or (platform_machine != 'AMD64' and platform_machine != 'x86_64' and sys_platform == 'win32') or (sys_platform != 'linux' and sys_platform != 'win32')", specifier = ">=1.29.0" },
+    { name = "onnxruntime-gpu", marker = "(platform_machine == 'AMD64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'x86_64' and sys_platform == 'win32')", specifier = ">=1.29.0" },
+    { name = "onnxruntime-qnn", marker = "platform_machine == 'ARM64' or platform_machine == 'aarch64'", specifier = ">=2.4.0" },
+    { name = "onnxscript", specifier = ">=0.7.1" },
+    { name = "pandas", specifier = ">=3.0.5" },
     { name = "pyarrow", specifier = ">=25" },
     { name = "pydantic", specifier = ">=2.11,<3" },
-    { name = "pyserial", marker = "extra == 'myo'", specifier = ">=3.5,<4" },
-    { name = "scikit-learn", marker = "extra == 'train'", specifier = ">=1.7,<2" },
+    { name = "pyserial", specifier = ">=3.5,<4" },
+    { name = "scikit-learn", specifier = ">=1.7,<2" },
     { name = "sifi-streamer", git = "https://github.com/BLINCdev/sifi-streamer.git?rev=v0.6.4" },
-    { name = "torch", marker = "(platform_machine == 'ARM64' and sys_platform == 'linux' and extra == 'train') or (platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'train')", specifier = ">=2.8,<3", index = "https://download.pytorch.org/whl/cpu" },
-    { name = "torch", marker = "(platform_machine != 'ARM64' and platform_machine != 'aarch64' and sys_platform == 'linux' and extra == 'train') or (platform_machine != 'ARM64' and platform_machine != 'aarch64' and sys_platform == 'win32' and extra == 'train')", specifier = ">=2.8,<3", index = "https://download.pytorch.org/whl/cu132" },
-    { name = "torch", marker = "(platform_machine == 'ARM64' and sys_platform == 'win32' and extra == 'train') or (platform_machine == 'aarch64' and sys_platform == 'win32' and extra == 'train') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'train')", specifier = ">=2.8,<3" },
+    { name = "torch", marker = "(platform_machine == 'ARM64' and sys_platform == 'win32') or (platform_machine == 'aarch64' and sys_platform == 'win32') or (sys_platform != 'linux' and sys_platform != 'win32')", specifier = ">=2.8,<3" },
+    { name = "torch", marker = "(platform_machine != 'ARM64' and platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_machine != 'ARM64' and platform_machine != 'aarch64' and sys_platform == 'win32')", specifier = ">=2.8,<3", index = "https://download.pytorch.org/whl/cu132" },
+    { name = "torch", marker = "(platform_machine == 'ARM64' and sys_platform == 'linux') or (platform_machine == 'aarch64' and sys_platform == 'linux')", specifier = ">=2.8,<3", index = "https://download.pytorch.org/whl/cpu" },
     { name = "uvicorn", specifier = ">=0.35,<1" },
 ]
-provides-extras = ["myo", "train", "onnx", "handi"]
 
 [package.metadata.requires-dev]
 dev = [

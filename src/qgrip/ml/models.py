@@ -399,7 +399,7 @@ class ONNXEMGClassifier:
         try:
             import onnxruntime as ort
         except ImportError as exc:
-            raise RuntimeError("ONNX inference requires the qgrip onnx extra") from exc
+            raise RuntimeError("QGrip installation is missing ONNX Runtime") from exc
         providers = ["CPUExecutionProvider"]
         if prefer_cuda and "CUDAExecutionProvider" in ort.get_available_providers():
             providers.insert(0, "CUDAExecutionProvider")
