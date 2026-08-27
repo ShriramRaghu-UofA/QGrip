@@ -1,5 +1,7 @@
 # QGrip
 
+![QGRipCover](images/QGripCover.gif)
+
 QGrip is a typed Python 3.14 application for collecting EMG data, training and
 validating gesture models, and controlling a Handi hand through the Arduino
 UNO Q Router. It includes an installable FastAPI/Svelte dashboard and a completely
