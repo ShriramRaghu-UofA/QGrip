@@ -14,8 +14,9 @@
 // near-identical sketches. The sketch performs no range/limit checking of its
 // own - it writes whatever position it's given straight to the servo. Grip
 // shapes, "closed hand" presets, per-digit drive limits, and any other range
-// gating live entirely on the RPC caller side (see rpc_handi.py) so they can be
-// tuned without reflashing.
+// gating live entirely on the RPC caller side (HandController in
+// src/qgrip/runtime/handi.py, not this app's thin python/main.py) so they can
+// be tuned without reflashing.
 //
 // Mix-and-match architecture:
 // Support for each interface is compiled in independently based on whether any
@@ -73,8 +74,8 @@
 //                joint as-is; a hobby-servo joint clamps to the servo-safe PWM
 //                range (see SERVO_PULSE_MIN_US/MAX_US), a DYNAMIXEL joint gets no
 //                range checking at all - drive-limit gating for both is the
-//                caller's job (see rpc_handi.py). Non-blocking. Always returns
-//                true.
+//                caller's job (HandController in src/qgrip/runtime/handi.py).
+//                Non-blocking. Always returns true.
 //     A separate call from set_led_frame (below) - RPClite's packet framing
 //     scanner re-walks nested-array arguments on every incoming byte with no
 //     memoization, so a combined positions+led_frame payload never finished

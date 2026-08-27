@@ -23,8 +23,8 @@ TEST_INTERVAL_S = 3.0
 def set_positions(positions) -> bool:
     """Drive every joint to `positions` (6 raw DYNAMIXEL goals, one per joint - see
     the sketch's Definitions comment for joint order). No range checking - sent
-    as-is; drive-limit gating is the caller's responsibility (see rpc_handi.py's
-    JOINT_RANGES). Returns True if the sketch accepted the command.
+    as-is; drive-limit gating is the caller's responsibility (see HandController
+    in src/qgrip/runtime/handi.py). Returns True if the sketch accepted the command.
     """
     ok = Bridge.call("set_positions", list(positions))
     if not ok:

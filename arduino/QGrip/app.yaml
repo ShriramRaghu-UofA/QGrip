@@ -1,5 +1,5 @@
 name: QGrip
-description: Drive a Handi Hand's joints (DYNAMIXEL and/or hobby PWM servos, mixed per-joint) from MPU-side joint/position RPC commands, with live EMG gesture inference via the Qgrip brick.
+description: Drive a Handi Hand's joints (DYNAMIXEL and/or hobby PWM servos, mixed per-joint) from MPU-side joint/position RPC commands.
 ports: []
 bricks: []
 icon: 🖐️

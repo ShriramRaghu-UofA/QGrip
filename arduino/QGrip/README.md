@@ -1,17 +1,26 @@
-# 🖐️ QGrip
+# 🖐️ QGrip — App Lab app
 
-Drive a Handi Hand's 6 digit joints from the UNO Q. A Python app on
-the MPU sends per-joint goal positions over the Router Bridge; a sketch on the
-onboard STM32 (MCU side) applies them to the servos. Each joint is independently
-wired to **either** a DYNAMIXEL X-series servo **or** a hobby (analog RC) PWM
-servo, and one sketch drives a hand that mixes both.
+This is the on-board App Lab App: a sketch on the UNO Q's STM32 (MCU side) that
+drives a Handi Hand's 6 digit joints, plus a thin Python RPC layer
+(`python/main.py`) that exposes the sketch's Router Bridge calls to the rest of
+the app. Each joint is independently wired to **either** a DYNAMIXEL X-series
+servo **or** a hobby (analog RC) PWM servo, and one sketch drives a hand that
+mixes both.
+
+The "what shape should the hand be in" logic — grip shapes/presets, per-digit
+drive limits (`JointLimit.minimum`/`maximum`), and range gating — is **not** in
+this folder. It lives in `HandController` in the top-level package
+(`src/qgrip/runtime/handi.py`), which talks to this app's sketch over the
+Router as its RPC transport. See the repository root [README.md](../../README.md)
+("Standalone Handi") for that layer.
 
 ## Architecture
 
-- **MPU (Python, `python/main.py`)** — owns all of the "what shape should the
-  hand be in" logic: grip shapes, presets, per-digit drive limits, and range
-  gating. It calls the sketch with raw goal positions. Because this lives on the
-  caller side, shapes and limits can be tuned without reflashing the MCU.
+- **MPU, this app (Python, `python/main.py`)** — a thin pass-through: each
+  function wraps one `Bridge.call(...)` to the sketch and returns its result
+  (plus a warning log on rejection).
+  `TEST_MODE` (see below) drives the hand
+  directly for bench testing, bypassing `HandController` entirely.
 - **MCU (sketch, `sketch/sketch.ino`)** — a thin position driver. It writes
   whatever it's given straight to each servo (DYNAMIXEL joints get no range
   checking; hobby-servo joints clamp to a servo-safe pulse-width range). It also
@@ -70,5 +79,6 @@ channels at a 20 ms / 50 Hz frame. Pulse widths are clamped to
 
 `python/main.py` exposes thin wrappers around each of these. Setting
 `TEST_MODE = True` in that file cycles the hand between an open and a closed
-shape on a timer, so the sketch and wiring can be bench-tested with
+shape (raw DYNAMIXEL positions, not a real drive-limit-gated preset) on a
+timer, so the sketch and wiring can be bench-tested with
 `arduino-app-cli app logs --follow` and no external RPC caller.
