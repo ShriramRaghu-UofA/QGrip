@@ -1,0 +1,7 @@
+profiles:
+  default:
+    platforms:
+      - platform: arduino:zephyr
+    libraries:
+      - Dynamixel2Arduino (0.8.1)
+default_profile: default
