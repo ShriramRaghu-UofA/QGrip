@@ -33,6 +33,8 @@
   let modelPath = $state('');
   let predictionHistory = $state.raw<Prediction[]>([]);
   let benchmarkResults = $state.raw<BenchmarkResult[]>([]);
+  let benchmarkIterations = $state(1000);
+  let benchmarkWarmup = $state(20);
   let benchmarking = $state(false);
   let error = $state('');
   let online = $state(true);
@@ -238,7 +240,11 @@
     try {
       const suite = await api.request<BenchmarkSuite>('/api/v1/benchmark', {
         method: 'POST',
-        body: JSON.stringify({ model: modelPath }),
+        body: JSON.stringify({
+          model: modelPath,
+          iterations: benchmarkIterations,
+          warmup: benchmarkWarmup,
+        }),
       });
       benchmarkResults = suite.results;
       error = '';
@@ -617,7 +623,7 @@
           <select class="select w-full" value={modelPath} onchange={(event) => chooseCheckpoint(event.currentTarget.value)} aria-label="Inference checkpoint"><option value="">Select a checkpoint</option>{#each artifacts.filter((path) => path.endsWith('.pt')) as path (path)}<option value={path}>{path}</option>{/each}</select>
           <div class="card border border-base-300 bg-base-100">
             <div class="card-body gap-4">
-              <div class="flex flex-wrap items-center justify-between gap-3">
+              <div class="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <h3 class="card-title text-lg">Inference benchmark</h3>
                   <p class="text-sm text-base-content/70">Compare ONNX Runtime and Torch on CPU, plus CUDA providers when this computer has them.</p>
@@ -626,6 +632,18 @@
                 <button class="btn btn-secondary" disabled={!modelPath || benchmarking || status.state === 'running'} onclick={() => void runBenchmark()}>
                   {#if benchmarking}<span class="loading loading-spinner loading-sm"></span> Benchmarking…{:else}Run benchmark{/if}
                 </button>
+              </div>
+              <div class="grid gap-3 sm:grid-cols-2">
+                <label class="fieldset">
+                  <span class="fieldset-legend">Timed inference windows</span>
+                  <input class="input w-full" aria-label="Timed inference windows" type="number" min="1" max="10000" step="1" bind:value={benchmarkIterations} disabled={benchmarking} />
+                  <span class="label">One window is one batch-1 prediction per runtime.</span>
+                </label>
+                <label class="fieldset">
+                  <span class="fieldset-legend">Warmup windows</span>
+                  <input class="input w-full" aria-label="Warmup windows" type="number" min="0" max="1000" step="1" bind:value={benchmarkWarmup} disabled={benchmarking} />
+                  <span class="label">Run before timing for every runtime.</span>
+                </label>
               </div>
               {#if benchmarkResults.length}
                 <BenchmarkPlot results={benchmarkResults} />

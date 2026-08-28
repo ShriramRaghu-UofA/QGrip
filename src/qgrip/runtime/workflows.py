@@ -48,6 +48,8 @@ from qgrip.core.domain import (
 from qgrip.core.errors import ArtifactError, BusyError, DeviceError, ValidationError
 
 ProgressCallback = Callable[[SGTProgress], None]
+DEFAULT_BENCHMARK_ITERATIONS = 1_000
+DEFAULT_BENCHMARK_WARMUP = 20
 
 
 def _valid_emg_rows(samples: np.ndarray, validity: np.ndarray) -> np.ndarray:
@@ -728,7 +730,10 @@ class InferenceService:
 
 
 def run_inference_benchmark(
-    inference: InferenceService, iterations: int = 200, warmup: int = 20, seed: int = 0
+    inference: InferenceService,
+    iterations: int = DEFAULT_BENCHMARK_ITERATIONS,
+    warmup: int = DEFAULT_BENCHMARK_WARMUP,
+    seed: int = 0,
 ) -> BenchmarkResult:
     """Measure ``predict`` latency/throughput on synthetic windows, no hardware required.
 
@@ -743,10 +748,12 @@ def run_inference_benchmark(
         raise ValidationError("benchmark warmup must not be negative")
     rng = np.random.default_rng(seed)
     shape = (inference.window_size, inference.channels)
-    windows = [rng.standard_normal(shape).astype(np.float32) for _ in range(warmup + iterations)]
-    for window in windows[:warmup]:
-        inference.predict(window)
-    latencies = np.array([inference.predict(window).latency_ms for window in windows[warmup:]])
+    for _ in range(warmup):
+        inference.predict(rng.standard_normal(shape, dtype=np.float32))
+    latencies = np.empty(iterations, dtype=np.float64)
+    for index in range(iterations):
+        window = rng.standard_normal(shape, dtype=np.float32)
+        latencies[index] = inference.predict(window).latency_ms
     total_seconds = latencies.sum() / 1000
     return BenchmarkResult(
         backend=inference.backend,
@@ -768,7 +775,10 @@ def run_inference_benchmark(
 
 
 def run_inference_benchmark_suite(
-    model: str | Path, iterations: int = 200, warmup: int = 20, seed: int = 0
+    model: str | Path,
+    iterations: int = DEFAULT_BENCHMARK_ITERATIONS,
+    warmup: int = DEFAULT_BENCHMARK_WARMUP,
+    seed: int = 0,
 ) -> tuple[BenchmarkResult, ...]:
     """Benchmark every loadable backend on CPU and on an actually available GPU."""
     checkpoint = Path(model).resolve()

@@ -33,6 +33,8 @@ from qgrip.core.profiles import (
 from qgrip.runtime.handi import HandiRuntime, run_interactive
 from qgrip.runtime.hid import LABEL_TO_AXIS, HidRuntime
 from qgrip.runtime.workflows import (
+    DEFAULT_BENCHMARK_ITERATIONS,
+    DEFAULT_BENCHMARK_WARMUP,
     CalibrationService,
     InferenceService,
     SGTService,
@@ -185,14 +187,17 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument(
         "--iterations",
         type=int,
-        default=200,
-        help="number of timed predictions to run (default: 200)",
+        default=DEFAULT_BENCHMARK_ITERATIONS,
+        help=f"number of timed predictions to run (default: {DEFAULT_BENCHMARK_ITERATIONS})",
     )
     benchmark.add_argument(
         "--warmup",
         type=int,
-        default=20,
-        help="untimed predictions run first to prime backend setup (default: 20)",
+        default=DEFAULT_BENCHMARK_WARMUP,
+        help=(
+            "untimed predictions run first to prime backend setup "
+            f"(default: {DEFAULT_BENCHMARK_WARMUP})"
+        ),
     )
     benchmark.add_argument(
         "--seed", type=int, default=0, help="RNG seed for synthetic input windows (default: 0)"

@@ -29,7 +29,12 @@ from qgrip.core.domain import (
 )
 from qgrip.core.errors import ArtifactError, QGripError
 from qgrip.core.profiles import load_profile
-from qgrip.runtime.workflows import WorkflowCoordinator, run_inference_benchmark_suite
+from qgrip.runtime.workflows import (
+    DEFAULT_BENCHMARK_ITERATIONS,
+    DEFAULT_BENCHMARK_WARMUP,
+    WorkflowCoordinator,
+    run_inference_benchmark_suite,
+)
 
 
 def notification_for(status: JobStatus) -> dict[str, object] | None:
@@ -91,8 +96,8 @@ class BenchmarkWire(WireModel):
     """Request an offline CPU/GPU benchmark suite for one checkpoint."""
 
     model: str
-    iterations: int = Field(default=200, ge=1, le=10_000)
-    warmup: int = Field(default=20, ge=0, le=1_000)
+    iterations: int = Field(default=DEFAULT_BENCHMARK_ITERATIONS, ge=1, le=10_000)
+    warmup: int = Field(default=DEFAULT_BENCHMARK_WARMUP, ge=0, le=1_000)
     seed: int = 0
 
 

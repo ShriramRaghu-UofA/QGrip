@@ -72,7 +72,7 @@ class AdapterTests(unittest.TestCase):
 
         parsed = build_parser().parse_args(["benchmark", "model.pt"])
         self.assertEqual(parsed.backend, "auto")
-        self.assertEqual(parsed.iterations, 200)
+        self.assertEqual(parsed.iterations, 1000)
         self.assertEqual(parsed.warmup, 20)
         self.assertEqual(parsed.device, "gpu")
         self.assertFalse(parsed.json)

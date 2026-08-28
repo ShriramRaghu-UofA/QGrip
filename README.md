@@ -27,7 +27,6 @@ validation. These instructions assume a source checkout on Windows with
 
 ![Dashboard](images/QGripDashboard.png)
 
-
 ### Web app (recommended)
 
 1. Install QGrip and its development tools from the repository root:
@@ -91,7 +90,6 @@ validation. These instructions assume a source checkout on Windows with
 
    Open the complete printed URL, including `?token=...`, in a browser. Keep the
    terminal running while using QGrip; press `Ctrl+C` there when you are finished.
-
 
 7. Complete the workflow in the web app:
 
@@ -210,7 +208,8 @@ uv run qgrip benchmark data/demo/models/RUN/model.pt --backend onnx --device cpu
 ```
 
 It reports mean/median/p95/p99/min/max/stdev latency in milliseconds plus overall
-throughput in predictions/sec. `--warmup` (default 20) runs untimed predictions
+throughput in predictions/sec. By default it measures 1,000 sequential, batch-size-one
+predictions. `--iterations` changes that timed window count, and `--warmup` (default 20) runs untimed predictions
 first so one-time backend setup (CUDA context, ONNX Runtime session, JIT) doesn't
 skew the timed iterations. `--backend` selects `auto` (default), `torch`, or `onnx`
 the same way `infer` does. `--json` prints a machine-readable result instead of the
@@ -223,10 +222,10 @@ backend available on the current computer.
 
 QGrip has two dependency sets:
 
-| Group        | Needed for |
-|--------------|------------|
+| Group        | Needed for                                                                                                          |
+| ------------ | ------------------------------------------------------------------------------------------------------------------- |
 | base package | all QGrip runtime features, including acquisition, training, ONNX inference, Myo, Handi, the CLI, and the dashboard |
-| `dev`        | source-development tools such as Ruff and ty |
+| `dev`        | source-development tools such as Ruff and ty                                                                        |
 
 `uv sync --locked` installs the base package and the default `dev` group for source
 development. Use `uv sync --locked --no-dev` when only the base package is needed.
@@ -436,7 +435,6 @@ unversioned checkpoints are rejected rather than guessed or migrated.
 
 ## Standalone Handi
 
-
 ![QGrip](images/qgripsolo.gif)
 
 ```powershell
@@ -487,16 +485,16 @@ not disable servo torque and does not replace a physical emergency stop.
 
 ## Performance summary table on Arduino UNO Q
 
-| Model | Dataset | Backend | Window | Mean latency | P95 latency | Throughput |
-| --- | --- | --- | --- | ---: | ---: | ---: |
-| CNN | MYO | ONNX | (200, 8) | 0.884 ms | 1.050 ms | 1130.6 pred/s |
-| CNN | MYO | Torch | (200, 8) | 5.196 ms | 5.562 ms | 192.5 pred/s |
-| CNN | SiFi | ONNX | (1000, 8) | 2.323 ms | 2.729 ms | 430.5 pred/s |
-| CNN | SiFi | Torch | (1000, 8) | 8.101 ms | 10.186 ms | 123.4 pred/s |
-| Transformer | MYO | ONNX | (200, 8) | 2.301 ms | 2.633 ms | 434.6 pred/s |
-| Transformer | MYO | Torch | (200, 8) | 14.418 ms | 16.829 ms | 69.4 pred/s |
-| Transformer | SiFi | ONNX | (1000, 8) | 4.745 ms | 7.818 ms | 210.8 pred/s |
-| Transformer | SiFi | Torch | (1000, 8) | 17.115 ms | 21.978 ms | 58.4 pred/s |
+| Model       | Dataset | Backend | Window    | Mean latency | P95 latency |    Throughput |
+| ----------- | ------- | ------- | --------- | -----------: | ----------: | ------------: |
+| CNN         | MYO     | ONNX    | (200, 8)  |     0.884 ms |    1.050 ms | 1130.6 pred/s |
+| CNN         | MYO     | Torch   | (200, 8)  |     5.196 ms |    5.562 ms |  192.5 pred/s |
+| CNN         | SiFi    | ONNX    | (1000, 8) |     2.323 ms |    2.729 ms |  430.5 pred/s |
+| CNN         | SiFi    | Torch   | (1000, 8) |     8.101 ms |   10.186 ms |  123.4 pred/s |
+| Transformer | MYO     | ONNX    | (200, 8)  |     2.301 ms |    2.633 ms |  434.6 pred/s |
+| Transformer | MYO     | Torch   | (200, 8)  |    14.418 ms |   16.829 ms |   69.4 pred/s |
+| Transformer | SiFi    | ONNX    | (1000, 8) |     4.745 ms |    7.818 ms |  210.8 pred/s |
+| Transformer | SiFi    | Torch   | (1000, 8) |    17.115 ms |   21.978 ms |   58.4 pred/s |
 
 ---
 
@@ -512,7 +510,6 @@ xychart
     bar "MYO" [0.884, 2.301, 0, 0]
     bar "SiFi" [0, 0, 2.323, 4.745]
 ```
-
 
 ## Standalone HID joystick
 
