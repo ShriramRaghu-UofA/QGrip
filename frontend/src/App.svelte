@@ -523,7 +523,7 @@
               {/if}
             </div>
           </div>
-          <div class="card-actions justify-end"><button class="btn btn-primary" disabled={!deviceReady} onclick={() => void continueToCollection()}>Continue to collection</button></div>
+          <div class="card-actions justify-end"><button class="btn btn-primary" onclick={() => void continueToCollection()}>Continue to collection</button></div>
         </StagePanel>
       {:else if stage === 'Collect'}
         <StagePanel title="Collect" description={proportional ? 'Complete subject calibration before collecting proportional training data.' : 'Discrete collection does not require subject activation calibration.'} active>

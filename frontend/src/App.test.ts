@@ -128,6 +128,28 @@ test("theme selection persists", async () => {
   expect(localStorage.getItem("qgrip-theme")).toBe("nord");
 });
 
+test("subject can be applied before connecting a device", async () => {
+  const user = userEvent.setup();
+  render(App);
+  const subjectInput = screen.getByRole("textbox", { name: "Subject" });
+  await user.clear(subjectInput);
+  await user.type(subjectInput, "alice");
+  await user.click(
+    screen.getByRole("button", { name: "Continue to collection" }),
+  );
+
+  expect(screen.getByText("Calibrate activation")).toBeInTheDocument();
+  expect(vi.mocked(fetch)).not.toHaveBeenCalledWith(
+    "/api/v1/doctor",
+    expect.anything(),
+  );
+  expect(
+    vi
+      .mocked(fetch)
+      .mock.calls.some(([input]) => String(input).includes("subject=alice")),
+  ).toBe(true);
+});
+
 test("proportional collection makes calibration the required next step", async () => {
   const user = userEvent.setup();
   render(App);
