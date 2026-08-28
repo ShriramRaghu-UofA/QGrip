@@ -80,6 +80,26 @@ export interface BenchmarkSuite {
   results: BenchmarkResult[];
 }
 
+/** Architecture, parameter, and checkpoint facts shown in Train and Validate. */
+export interface ModelSummary {
+  source: 'preset' | 'checkpoint';
+  model_name: string;
+  model_class: string;
+  model_config: Record<string, boolean | number | string>;
+  labels: string[];
+  window_size: number;
+  channels: number;
+  sample_rate_hz: number;
+  normalization: string;
+  proportional: boolean;
+  parameter_count: number;
+  trainable_parameter_count: number;
+  module_tree: string;
+  checkpoint?: string | null;
+  validation_loss?: number | null;
+  validation_accuracy?: number | null;
+}
+
 /** Metrics recorded after a complete training epoch. */
 export interface EpochMetric {
   epoch: number;

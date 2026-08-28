@@ -6,7 +6,13 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from qgrip.core.domain import BenchmarkResult, ComputePreference
+from qgrip.core.domain import (
+    BenchmarkResult,
+    ComputePreference,
+    ModelName,
+    ModelSummary,
+    NormalizationMode,
+)
 from qgrip.runtime.api import create_app, notification_for
 from qgrip.runtime.cli import main
 from tests.helpers import write_profile
@@ -112,3 +118,50 @@ class AdapterTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json(), {"results": [asdict(result)]})
             benchmark.assert_called_once()
+
+    def test_dashboard_exposes_model_preset_and_checkpoint_summaries(self) -> None:
+        summary = ModelSummary(
+            source="preset",
+            model_name=ModelName.DENSE,
+            model_class="DenseEMGClassifier",
+            model_config=(("hidden_dim", 64), ("predict_activation", True)),
+            labels=("rest", "open"),
+            window_size=200,
+            channels=8,
+            sample_rate_hz=200.0,
+            normalization=NormalizationMode.WINDOW_ZSCORE,
+            proportional=True,
+            parameter_count=1234,
+            trainable_parameter_count=1234,
+            module_tree="DenseEMGClassifier(...)\n",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            app = create_app(write_profile(Path(directory)), token="secret")
+            with (
+                patch(
+                    "qgrip.runtime.api.ModelSummaryService.preview", return_value=summary
+                ) as preview,
+                patch(
+                    "qgrip.runtime.api.ModelSummaryService.checkpoint", return_value=summary
+                ) as checkpoint,
+                TestClient(app) as client,
+            ):
+                headers = {"X-QGrip-Token": "secret"}
+                preset_response = client.get(
+                    "/api/v1/models/dense/summary?proportional=false", headers=headers
+                )
+                checkpoint_response = client.get(
+                    "/api/v1/checkpoints/summary?model=C%3A%2Fdata%2Fmodel.pt",
+                    headers=headers,
+                )
+
+            self.assertEqual(preset_response.status_code, 200)
+            self.assertEqual(
+                preset_response.json()["model_config"],
+                {"hidden_dim": 64, "predict_activation": True},
+            )
+            self.assertEqual(preset_response.json()["parameter_count"], 1234)
+            self.assertEqual(checkpoint_response.status_code, 200)
+            preview.assert_called_once()
+            self.assertFalse(preview.call_args.args[2])
+            checkpoint.assert_called_once_with(Path("C:/data/model.pt"))

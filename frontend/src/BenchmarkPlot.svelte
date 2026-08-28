@@ -26,59 +26,54 @@
     </span>
   </div>
 
-  <div class="grid gap-4 xl:grid-cols-2">
-    <figure class="rounded-box bg-base-300 p-4" aria-label="Benchmark latency percentile bars">
-      <figcaption class="mb-4">
+  <div class="space-y-4">
+    <section class="rounded-box bg-base-300 p-5" aria-label="Benchmark latency percentile bars">
+      <header class="mb-5">
         <h4 class="font-semibold">Latency percentiles</h4>
         <p class="text-xs text-base-content/60">Grouped horizontal bars · lower is better</p>
-      </figcaption>
-      <div class="mb-3 flex flex-wrap gap-3 text-xs" aria-hidden="true">
-        <span class="flex items-center gap-1"><span class="size-2 rounded-full bg-success"></span>Median</span>
-        <span class="flex items-center gap-1"><span class="size-2 rounded-full bg-warning"></span>p95</span>
-        <span class="flex items-center gap-1"><span class="size-2 rounded-full bg-error"></span>p99</span>
-      </div>
+      </header>
       <div class="space-y-5">
         {#each results as result (`${result.backend}-${result.device}`)}
-          <div class="grid gap-2 sm:grid-cols-[8rem_minmax(16rem,1fr)]">
+          <div class="grid gap-2 md:grid-cols-[10rem_minmax(0,1fr)] md:gap-4">
             <div class="self-center text-sm font-semibold leading-tight">{runtimeLabel(result)}</div>
             <div class="space-y-1.5">
               <div class="flex items-center gap-2 text-xs">
                 <span class="w-12 shrink-0">Median</span>
-                <div class="h-3 min-w-0 flex-1 overflow-hidden rounded-full bg-base-100"><div class="h-full rounded-full bg-success" style:width={barWidth(result.median_ms, maximumLatency)}></div></div>
+                <div class="h-4 min-w-0 flex-1 overflow-hidden rounded-full bg-base-100"><div class="h-full rounded-full bg-success" style:width={barWidth(result.median_ms, maximumLatency)}></div></div>
                 <span class="w-20 shrink-0 text-right tabular-nums">{result.median_ms.toFixed(3)} ms</span>
               </div>
               <div class="flex items-center gap-2 text-xs">
                 <span class="w-12 shrink-0">p95</span>
-                <div class="h-3 min-w-0 flex-1 overflow-hidden rounded-full bg-base-100"><div class="h-full rounded-full bg-warning" style:width={barWidth(result.p95_ms, maximumLatency)}></div></div>
+                <div class="h-4 min-w-0 flex-1 overflow-hidden rounded-full bg-base-100"><div class="h-full rounded-full bg-warning" style:width={barWidth(result.p95_ms, maximumLatency)}></div></div>
                 <span class="w-20 shrink-0 text-right tabular-nums">{result.p95_ms.toFixed(3)} ms</span>
               </div>
               <div class="flex items-center gap-2 text-xs">
                 <span class="w-12 shrink-0">p99</span>
-                <div class="h-3 min-w-0 flex-1 overflow-hidden rounded-full bg-base-100"><div class="h-full rounded-full bg-error" style:width={barWidth(result.p99_ms, maximumLatency)}></div></div>
+                <div class="h-4 min-w-0 flex-1 overflow-hidden rounded-full bg-base-100"><div class="h-full rounded-full bg-error" style:width={barWidth(result.p99_ms, maximumLatency)}></div></div>
                 <span class="w-20 shrink-0 text-right tabular-nums">{result.p99_ms.toFixed(3)} ms</span>
               </div>
             </div>
           </div>
         {/each}
       </div>
-    </figure>
+    </section>
 
-    <figure class="rounded-box bg-base-300 p-4" aria-label="Benchmark throughput bars">
-      <figcaption class="mb-4">
+    <section class="rounded-box bg-base-300 p-5" aria-label="Benchmark throughput bars">
+      <header class="mb-5">
         <h4 class="font-semibold">Throughput</h4>
         <p class="text-xs text-base-content/60">Horizontal bars · higher is better</p>
-      </figcaption>
+      </header>
       <div class="space-y-5">
         {#each results as result (`${result.backend}-${result.device}`)}
-          <div class="grid gap-2 sm:grid-cols-[8rem_minmax(16rem,1fr)]">
+          <div class="grid gap-2 md:grid-cols-[10rem_minmax(0,1fr)] md:gap-4">
             <div class="self-center text-sm font-semibold leading-tight">{runtimeLabel(result)}</div>
             <div class="flex items-center gap-2">
-              <div class="h-6 min-w-0 flex-1 overflow-hidden rounded-full bg-base-100"><div class="h-full rounded-full bg-info" style:width={barWidth(result.throughput_hz, maximumThroughput)}></div></div>
+              <div class="h-7 min-w-0 flex-1 overflow-hidden rounded-full bg-base-100"><div class="h-full rounded-full bg-info" style:width={barWidth(result.throughput_hz, maximumThroughput)}></div></div>
               <span class="w-24 shrink-0 text-right text-xs tabular-nums">{result.throughput_hz.toFixed(1)}/s</span>
             </div>
           </div>
         {/each}
       </div>
-    </figure>
+    </section>
   </div>
 {/if}

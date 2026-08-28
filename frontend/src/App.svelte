@@ -7,12 +7,14 @@
     Bootstrap,
     DoctorReport,
     JobStatus,
+    ModelSummary,
     Notification,
     Prediction,
   } from './api';
   import { QGripApi } from './api';
   import BenchmarkPlot from './BenchmarkPlot.svelte';
   import MetricPlot from './MetricPlot.svelte';
+  import ModelSummaryCard from './ModelSummaryCard.svelte';
   import StagePanel from './StagePanel.svelte';
 
   /** Ordered dashboard workflow stages used for navigation and progress context. */
@@ -36,6 +38,10 @@
   let benchmarkIterations = $state(1000);
   let benchmarkWarmup = $state(20);
   let benchmarking = $state(false);
+  let trainingModelSummary = $state.raw<ModelSummary | null>(null);
+  let checkpointModelSummary = $state.raw<ModelSummary | null>(null);
+  let trainingModelSummaryLoading = $state(false);
+  let checkpointModelSummaryLoading = $state(false);
   let error = $state('');
   let online = $state(true);
 
@@ -66,6 +72,8 @@
   let localElapsed = $state(0);
   let countdownTimer: number | undefined;
   let phaseKey = '';
+  let trainingSummaryRequest = 0;
+  let checkpointSummaryRequest = 0;
 
   const stageIndex = $derived(stages.indexOf(stage));
   const progress = $derived(Math.round((status.progress ?? 0) * 100));
@@ -201,7 +209,7 @@
     try {
       bootstrap = await api.request<Bootstrap>('/api/v1/bootstrap');
       model = bootstrap.models[0] ?? 'transformer';
-      await loadArtifacts();
+      await Promise.all([loadArtifacts(), loadTrainingModelSummary(model)]);
       error = '';
     } catch (cause) {
       error = cause instanceof Error ? cause.message : String(cause);
@@ -216,7 +224,65 @@
     artifacts = response.artifacts ?? [];
     calibrationReady = response.calibration_ready ?? false;
     trainingInput ||= artifacts.find((path) => path.endsWith('.parquet')) ?? '';
-    modelPath ||= artifacts.find((path) => path.endsWith('.pt')) ?? '';
+    if (!modelPath) {
+      modelPath = artifacts.find((path) => path.endsWith('.pt')) ?? '';
+      if (modelPath) await loadCheckpointModelSummary(modelPath);
+    }
+  }
+
+  /** Load a profile-shaped preview for the selected training preset. */
+  async function loadTrainingModelSummary(selected: string): Promise<void> {
+    const request = ++trainingSummaryRequest;
+    trainingModelSummaryLoading = true;
+    try {
+      const summary = await api.request<ModelSummary>(
+        `/api/v1/models/${encodeURIComponent(selected)}/summary?proportional=${proportional}`
+      );
+      if (request === trainingSummaryRequest) trainingModelSummary = summary;
+    } catch (cause) {
+      if (request === trainingSummaryRequest) {
+        trainingModelSummary = null;
+        error = cause instanceof Error ? cause.message : String(cause);
+      }
+    } finally {
+      if (request === trainingSummaryRequest) trainingModelSummaryLoading = false;
+    }
+  }
+
+  /** Change the training preset and refresh its effective architecture preview. */
+  function chooseTrainingModel(value: string): void {
+    model = value;
+    void loadTrainingModelSummary(value);
+  }
+
+  /** Load strict facts from a selected checkpoint, optionally promoting them to Train. */
+  async function loadCheckpointModelSummary(
+    path: string,
+    promoteToTraining = false
+  ): Promise<void> {
+    const request = ++checkpointSummaryRequest;
+    if (!path) {
+      checkpointModelSummary = null;
+      checkpointModelSummaryLoading = false;
+      return;
+    }
+    checkpointModelSummaryLoading = true;
+    try {
+      const summary = await api.request<ModelSummary>(
+        `/api/v1/checkpoints/summary?model=${encodeURIComponent(path)}`
+      );
+      if (request === checkpointSummaryRequest) {
+        checkpointModelSummary = summary;
+        if (promoteToTraining) trainingModelSummary = summary;
+      }
+    } catch (cause) {
+      if (request === checkpointSummaryRequest) {
+        checkpointModelSummary = null;
+        error = cause instanceof Error ? cause.message : String(cause);
+      }
+    } finally {
+      if (request === checkpointSummaryRequest) checkpointModelSummaryLoading = false;
+    }
   }
 
   /** Run the server-side device probe and surface either its result or error. */
@@ -259,6 +325,19 @@
   function chooseCheckpoint(value: string): void {
     modelPath = value;
     benchmarkResults = [];
+    void loadCheckpointModelSummary(value);
+  }
+
+  /** Clear subject-scoped artifact and checkpoint state while the subject changes. */
+  function resetSubjectArtifacts(): void {
+    calibrationReady = false;
+    capturePath = '';
+    trainingInput = '';
+    modelPath = '';
+    checkpointModelSummary = null;
+    checkpointModelSummaryLoading = false;
+    benchmarkResults = [];
+    checkpointSummaryRequest += 1;
   }
 
   /** Replace local state with an authoritative status snapshot and derive UI updates. */
@@ -277,7 +356,10 @@
           calibrationReady = true;
         if (next.kind === 'sgt' && next.result) capturePath = next.result;
         if (next.kind === 'export' && next.result) trainingInput = next.result;
-        if (next.kind === 'training' && next.result) modelPath = next.result;
+        if (next.kind === 'training' && next.result) {
+          modelPath = next.result;
+          void loadCheckpointModelSummary(next.result, true);
+        }
         void loadArtifacts();
       }
     }
@@ -413,7 +495,7 @@
 
       {#if stage === 'Setup'}
         <StagePanel title="Setup" description="Review the profile, connect the device, and confirm readiness before collecting." active>
-          <fieldset class="fieldset"><legend class="fieldset-legend">Subject</legend><input class="input w-full" bind:value={subject} autocomplete="off" oninput={() => { calibrationReady = false; capturePath = ''; trainingInput = ''; modelPath = ''; }} /></fieldset>
+          <fieldset class="fieldset"><legend class="fieldset-legend">Subject</legend><input class="input w-full" bind:value={subject} autocomplete="off" oninput={resetSubjectArtifacts} /></fieldset>
           <div class="stats stats-vertical bg-base-300 sm:stats-horizontal">
             <div class="stat"><div class="stat-title">Device</div><div class="stat-value text-xl">{bootstrap?.device ?? 'Loading…'}</div></div>
             <div class="stat"><div class="stat-title">Profile</div><div class="stat-desc max-w-72 truncate">{bootstrap?.profile ?? '—'}</div></div>
@@ -560,8 +642,9 @@
         </StagePanel>
       {:else if stage === 'Train'}
         <StagePanel title="Train" description="Use the latest compatible session by default or explicitly combine sessions." active>
-          <select class="select w-full" bind:value={model} aria-label="Model preset">{#each bootstrap?.models ?? [] as item (item)}<option value={item}>{item}</option>{/each}</select>
+          <select class="select w-full" value={model} onchange={(event) => chooseTrainingModel(event.currentTarget.value)} aria-label="Model preset">{#each bootstrap?.models ?? [] as item (item)}<option value={item}>{item}</option>{/each}</select>
           <select class="select w-full" bind:value={trainingInput} aria-label="Training session"><option value="">Latest compatible session</option>{#each artifacts.filter((path) => path.endsWith('.parquet')) as path (path)}<option value={path}>{path}</option>{/each}</select>
+          <ModelSummaryCard summary={trainingModelSummary} loading={trainingModelSummaryLoading} />
           <div class="space-y-1">
             <div class="flex justify-between text-sm"><span>{latestMetric ? `Epoch ${latestMetric.epoch}` : 'Training progress'}</span><span>{progress}%</span></div>
             <progress class="progress progress-secondary w-full" value={progress} max="100"></progress>
@@ -621,6 +704,7 @@
       {:else}
         <StagePanel title="Validate" description="Inspect class, confidence, activation, signal health, and end-to-end latency." active>
           <select class="select w-full" value={modelPath} onchange={(event) => chooseCheckpoint(event.currentTarget.value)} aria-label="Inference checkpoint"><option value="">Select a checkpoint</option>{#each artifacts.filter((path) => path.endsWith('.pt')) as path (path)}<option value={path}>{path}</option>{/each}</select>
+          <ModelSummaryCard summary={checkpointModelSummary} loading={checkpointModelSummaryLoading} />
           <div class="card border border-base-300 bg-base-100">
             <div class="card-body gap-4">
               <div class="flex flex-wrap items-start justify-between gap-3">
@@ -647,16 +731,19 @@
               </div>
               {#if benchmarkResults.length}
                 <BenchmarkPlot results={benchmarkResults} />
-                <div class="overflow-x-auto">
-                  <table class="table table-sm">
-                    <thead><tr><th>Runtime</th><th>Device</th><th class="text-right">Median</th><th class="text-right">p95</th><th class="text-right">p99</th><th class="text-right">Throughput</th></tr></thead>
-                    <tbody>
-                      {#each benchmarkResults as result (`${result.backend}-${result.device}`)}
-                        <tr><td class="uppercase">{result.backend}</td><td class="uppercase"><span class={['badge', result.device === 'gpu' ? 'badge-accent' : 'badge-ghost']}>{result.device}</span></td><td class="text-right">{result.median_ms.toFixed(3)} ms</td><td class="text-right">{result.p95_ms.toFixed(3)} ms</td><td class="text-right">{result.p99_ms.toFixed(3)} ms</td><td class="text-right">{result.throughput_hz.toFixed(1)}/s</td></tr>
-                      {/each}
-                    </tbody>
-                  </table>
-                </div>
+                <details class="collapse collapse-arrow border border-base-300 bg-base-200">
+                  <summary class="collapse-title font-semibold">Raw benchmark results</summary>
+                  <div class="collapse-content overflow-x-auto">
+                    <table class="table table-sm">
+                      <thead><tr><th>Runtime</th><th>Device</th><th class="text-right">Median</th><th class="text-right">p95</th><th class="text-right">p99</th><th class="text-right">Throughput</th></tr></thead>
+                      <tbody>
+                        {#each benchmarkResults as result (`${result.backend}-${result.device}`)}
+                          <tr><td class="uppercase">{result.backend}</td><td class="uppercase"><span class={['badge', result.device === 'gpu' ? 'badge-accent' : 'badge-ghost']}>{result.device}</span></td><td class="text-right">{result.median_ms.toFixed(3)} ms</td><td class="text-right">{result.p95_ms.toFixed(3)} ms</td><td class="text-right">{result.p99_ms.toFixed(3)} ms</td><td class="text-right">{result.throughput_hz.toFixed(1)}/s</td></tr>
+                        {/each}
+                      </tbody>
+                    </table>
+                  </div>
+                </details>
               {:else if !benchmarking}
                 <p class="text-sm text-base-content/60">Select a checkpoint and run a hardware-local benchmark. No EMG device is required.</p>
               {/if}

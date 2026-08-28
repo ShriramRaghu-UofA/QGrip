@@ -9,6 +9,35 @@ vi.mock("uplot", () => ({
   },
 }));
 
+function modelSummary(path: string): object {
+  const checkpoint = path.includes("/checkpoints/");
+  const dense = path.includes("dense") || checkpoint;
+  return {
+    source: checkpoint ? "checkpoint" : "preset",
+    model_name: dense ? "dense" : "transformer",
+    model_class: dense ? "DenseEMGClassifier" : "TransformerEMGClassifier",
+    model_config: {
+      n_classes: 3,
+      n_channels: 8,
+      predict_activation: true,
+    },
+    labels: ["rest", "open", "close"],
+    window_size: 200,
+    channels: 8,
+    sample_rate_hz: 200,
+    normalization: "window_zscore",
+    proportional: true,
+    parameter_count: dense ? 1234 : 5678,
+    trainable_parameter_count: dense ? 1234 : 5678,
+    module_tree: dense
+      ? "DenseEMGClassifier(...)"
+      : "TransformerEMGClassifier(...)\n",
+    checkpoint: checkpoint ? "C:/data/model.pt" : null,
+    validation_loss: checkpoint ? 0.1234 : null,
+    validation_accuracy: checkpoint ? 0.91 : null,
+  };
+}
+
 beforeEach(() => {
   localStorage.clear();
   vi.stubGlobal(
@@ -26,6 +55,7 @@ beforeEach(() => {
       };
       if (path.includes("/api/v1/artifacts"))
         body = { artifacts: [], calibration_ready: false };
+      if (path.includes("/summary")) body = modelSummary(path);
       if (path.includes("/api/v1/doctor"))
         body = {
           ready: true,
@@ -55,6 +85,27 @@ test("all workflow stages are keyboard-accessible", async () => {
   expect(
     screen.queryByRole("button", { name: "Handi" }),
   ).not.toBeInTheDocument();
+});
+
+test("training exposes a compact model summary with expandable details", async () => {
+  const user = userEvent.setup();
+  render(App);
+  await user.click(screen.getByRole("button", { name: "Train" }));
+  await waitFor(() =>
+    expect(screen.getByText("TransformerEMGClassifier")).toBeInTheDocument(),
+  );
+  expect(screen.getByText("5,678")).toBeInTheDocument();
+  const details = screen.getByText("Architecture details").closest("details");
+  expect(details).not.toHaveAttribute("open");
+
+  await user.selectOptions(
+    screen.getByRole("combobox", { name: "Model preset" }),
+    "dense",
+  );
+  await waitFor(() =>
+    expect(screen.getByText("DenseEMGClassifier")).toBeInTheDocument(),
+  );
+  expect(screen.getByText("1,234")).toBeInTheDocument();
 });
 
 test("theme selection persists", async () => {
@@ -102,6 +153,7 @@ test("discrete collection skips calibration", async () => {
       };
       if (path.includes("/api/v1/artifacts"))
         body = { artifacts: [], calibration_ready: false };
+      if (path.includes("/summary")) body = modelSummary(path);
       if (path.includes("/api/v1/doctor"))
         body = {
           ready: true,
@@ -154,6 +206,7 @@ test("SGT activation guidance remains visible during preparation", async () => {
       };
       if (path.includes("/api/v1/artifacts"))
         body = { artifacts: [], calibration_ready: true };
+      if (path.includes("/summary")) body = modelSummary(path);
       if (path.includes("/api/v1/doctor"))
         body = {
           ready: true,
@@ -217,6 +270,7 @@ test("live inference renders backend predictions", async () => {
       };
       if (path.includes("/api/v1/artifacts"))
         body = { artifacts: ["C:/data/model.pt"], calibration_ready: false };
+      if (path.includes("/summary")) body = modelSummary(path);
       if (path.includes("/api/v1/inference/start"))
         body = { state: "running", kind: "inference" };
       if (path.includes("/api/v1/inference/status"))
@@ -248,6 +302,10 @@ test("live inference renders backend predictions", async () => {
   const user = userEvent.setup();
   render(App);
   await user.click(screen.getByRole("button", { name: "Validate" }));
+  await waitFor(() =>
+    expect(screen.getByText(/Validation 91\.0%/)).toBeInTheDocument(),
+  );
+  expect(screen.getByText(/loss 0\.1234/)).toBeInTheDocument();
   const start = screen.getByRole("button", { name: "Start live inference" });
   await waitFor(() => expect(start).toBeEnabled());
   await user.click(start);
@@ -278,6 +336,7 @@ test("benchmark renders CPU and available GPU comparisons", async () => {
       };
       if (path.includes("/api/v1/artifacts"))
         body = { artifacts: ["C:/data/model.pt"], calibration_ready: false };
+      if (path.includes("/summary")) body = modelSummary(path);
       if (path.includes("/api/v1/benchmark")) {
         benchmarkBody = JSON.parse(String(init?.body)) as {
           iterations: number;
@@ -353,4 +412,7 @@ test("benchmark renders CPU and available GPU comparisons", async () => {
     /25.*timed batch-1 windows/,
   );
   expect(screen.getAllByText(/gpu/i).length).toBeGreaterThan(0);
+  expect(
+    screen.getByText("Raw benchmark results").closest("details"),
+  ).not.toHaveAttribute("open");
 });

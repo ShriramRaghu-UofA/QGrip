@@ -37,6 +37,9 @@ from qgrip.core.domain import (
     EpochMetric,
     JobState,
     JobStatus,
+    ModelConfigValue,
+    ModelName,
+    ModelSummary,
     Prediction,
     QGripProfile,
     SGTCommand,
@@ -44,6 +47,7 @@ from qgrip.core.domain import (
     SGTRequest,
     TrainingRequest,
     TrainingSummary,
+    resolve_stft_dimensions,
 )
 from qgrip.core.errors import ArtifactError, BusyError, DeviceError, ValidationError
 
@@ -601,6 +605,134 @@ class TrainingService:
             raise ArtifactError("QGrip installation is missing training dependencies") from exc
         return TorchTrainingService(request.profile.training).train(
             request, cancel, metric, summary
+        )
+
+
+class ModelSummaryService:
+    """Construct CPU-only model descriptions without exposing framework objects."""
+
+    @staticmethod
+    def _config_value(value: object) -> ModelConfigValue:
+        """Contain checkpoint/config scalar conversion at the Torch boundary."""
+        if isinstance(value, bool | int | float | str):
+            return value
+        raise ArtifactError(f"model configuration contains unsupported value {value!r}")
+
+    @classmethod
+    def _summarize(
+        cls,
+        model: Any,
+        *,
+        source: str,
+        model_name: ModelName,
+        labels: tuple[str, ...],
+        sample_rate_hz: float,
+        checkpoint: Path | None = None,
+        validation_loss: float | None = None,
+        validation_accuracy: float | None = None,
+    ) -> ModelSummary:
+        """Convert one validated Torch model into immutable dashboard facts."""
+        model_config = tuple(
+            (str(key), cls._config_value(value)) for key, value in model.model_config.items()
+        )
+        parameters = tuple(model.parameters())
+        return ModelSummary(
+            source=source,
+            model_name=model_name,
+            model_class=type(model).__name__,
+            model_config=model_config,
+            labels=labels,
+            window_size=int(model.window_size),
+            channels=int(model.n_channels),
+            sample_rate_hz=float(sample_rate_hz),
+            normalization=model.normalization,
+            proportional=bool(model.predict_activation),
+            parameter_count=sum(int(parameter.numel()) for parameter in parameters),
+            trainable_parameter_count=sum(
+                int(parameter.numel()) for parameter in parameters if parameter.requires_grad
+            ),
+            module_tree=str(model),
+            checkpoint=checkpoint,
+            validation_loss=validation_loss,
+            validation_accuracy=validation_accuracy,
+        )
+
+    @classmethod
+    def preview(
+        cls, profile: QGripProfile, model_name: ModelName | str, proportional: bool
+    ) -> ModelSummary:
+        """Describe the selected preset using the profile's effective dimensions."""
+        try:
+            from qgrip.ml.models import create_model
+
+            resolved_name = ModelName(model_name)
+            sample_rate_hz = profile.device.sample_rate_hz
+            window_size, n_fft, hop_length = resolve_stft_dimensions(
+                sample_rate_hz,
+                profile.training.training_window_seconds,
+                profile.training.stft_window_seconds,
+                profile.training.stft_hop_seconds,
+            )
+            model = create_model(
+                resolved_name,
+                n_classes=len(profile.sgt.gestures),
+                window_size=window_size,
+                n_channels=profile.device.channels,
+                n_fft=n_fft,
+                hop_length=hop_length,
+                normalization=profile.training.normalization.value,
+                predict_activation=proportional,
+                **dict(profile.model.architecture),
+            )
+        except (ImportError, TypeError, ValueError) as exc:
+            raise ArtifactError(f"cannot summarize model preset: {exc}") from exc
+        return cls._summarize(
+            model,
+            source="preset",
+            model_name=resolved_name,
+            labels=profile.sgt.gestures,
+            sample_rate_hz=sample_rate_hz,
+        )
+
+    @classmethod
+    def checkpoint(cls, model: str | Path) -> ModelSummary:
+        """Load and describe the authoritative Torch checkpoint for an artifact."""
+        checkpoint = Path(model).resolve()
+        if checkpoint.suffix == ".onnx":
+            checkpoint = checkpoint.with_suffix(".pt")
+        if checkpoint.suffix != ".pt" or not checkpoint.is_file():
+            raise ArtifactError(f"model checkpoint does not exist: {checkpoint}")
+        try:
+            from qgrip.ml.models import load_model_checkpoint
+
+            loaded, metadata = load_model_checkpoint(checkpoint, "cpu")
+            resolved_name = ModelName(metadata["model_name"])
+            raw_labels = metadata.get("labels")
+            if (
+                not isinstance(raw_labels, list)
+                or not raw_labels
+                or not all(isinstance(label, str) for label in raw_labels)
+            ):
+                raise ValueError("checkpoint labels must be a non-empty list of strings")
+            labels = tuple(raw_labels)
+            if len(labels) != int(loaded.model_config["n_classes"]):
+                raise ValueError("checkpoint labels do not match model_config.n_classes")
+            sample_rate_hz = float(metadata["sample_rate_hz"])
+            raw_loss = metadata.get("val_loss")
+            raw_accuracy = metadata.get("val_acc")
+            validation_loss = float(raw_loss) if raw_loss is not None else None
+            validation_accuracy = float(raw_accuracy) if raw_accuracy is not None else None
+        except (ImportError, KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
+            raise ArtifactError(f"cannot summarize model checkpoint: {exc}") from exc
+        return cls._summarize(
+            loaded,
+            source="checkpoint",
+            model_name=resolved_name,
+            labels=labels,
+            sample_rate_hz=sample_rate_hz,
+            checkpoint=checkpoint,
+            validation_loss=validation_loss,
+            validation_accuracy=validation_accuracy,
         )
 
 

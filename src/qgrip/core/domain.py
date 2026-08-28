@@ -456,6 +456,31 @@ class TrainingSummary:
         return self.training_samples + self.validation_samples
 
 
+ModelConfigValue = bool | int | float | str
+
+
+@dataclass(frozen=True, slots=True)
+class ModelSummary:
+    """Human-readable architecture and parameter facts for a preset or checkpoint."""
+
+    source: str
+    model_name: ModelName
+    model_class: str
+    model_config: tuple[tuple[str, ModelConfigValue], ...]
+    labels: tuple[str, ...]
+    window_size: int
+    channels: int
+    sample_rate_hz: float
+    normalization: NormalizationMode
+    proportional: bool
+    parameter_count: int
+    trainable_parameter_count: int
+    module_tree: str
+    checkpoint: Path | None = None
+    validation_loss: float | None = None
+    validation_accuracy: float | None = None
+
+
 @dataclass(frozen=True, slots=True)
 class Prediction:
     """One classifier output: winning gesture, confidence, and proportional effort."""

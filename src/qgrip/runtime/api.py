@@ -22,6 +22,7 @@ from qgrip.core.domain import (
     JobState,
     JobStatus,
     ModelName,
+    ModelSummary,
     QGripProfile,
     SGTCommand,
     SGTRequest,
@@ -32,6 +33,7 @@ from qgrip.core.profiles import load_profile
 from qgrip.runtime.workflows import (
     DEFAULT_BENCHMARK_ITERATIONS,
     DEFAULT_BENCHMARK_WARMUP,
+    ModelSummaryService,
     WorkflowCoordinator,
     run_inference_benchmark_suite,
 )
@@ -52,6 +54,13 @@ def notification_for(status: JobStatus) -> dict[str, object] | None:
     if status.state == JobState.CANCELLED:
         return {"kind": kind, "level": "warning", "message": f"{kind} cancelled"}
     return None
+
+
+def model_summary_payload(summary: ModelSummary) -> dict[str, object]:
+    """Serialize immutable model facts with canonical config as a JSON object."""
+    payload = asdict(summary)
+    payload["model_config"] = dict(summary.model_config)
+    return payload
 
 
 class WireModel(BaseModel):
@@ -179,6 +188,16 @@ def create_app(
             "artifacts": [str(path) for path in discover_artifacts(current, subject)],
             "calibration_ready": calibration_ready,
         }
+
+    @app.get("/api/v1/models/{model}/summary", dependencies=protected)
+    def model_preview(model: ModelName, proportional: bool = True) -> dict[str, object]:
+        """Describe one profile-shaped model preset before training starts."""
+        return model_summary_payload(ModelSummaryService.preview(current, model, proportional))
+
+    @app.get("/api/v1/checkpoints/summary", dependencies=protected)
+    def checkpoint_summary(model: str) -> dict[str, object]:
+        """Describe the authoritative Torch checkpoint behind one model artifact."""
+        return model_summary_payload(ModelSummaryService.checkpoint(Path(model)))
 
     @app.post("/api/v1/sgt/start", dependencies=protected)
     def start_sgt(body: SGTWire) -> dict[str, object]:

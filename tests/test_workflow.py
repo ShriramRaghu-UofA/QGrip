@@ -25,11 +25,12 @@ from qgrip.core.domain import (
     SGTRequest,
     TrainingRequest,
 )
-from qgrip.core.errors import ValidationError
+from qgrip.core.errors import ArtifactError, ValidationError
 from qgrip.core.profiles import load_profile
 from qgrip.runtime.workflows import (
     CalibrationService,
     InferenceService,
+    ModelSummaryService,
     ProgressCallback,
     SGTCommandGate,
     SGTService,
@@ -173,6 +174,27 @@ class SyntheticWorkflowTests(unittest.TestCase):
             checkpoint = TrainingService().train(
                 TrainingRequest("subject-1", profile, (), ModelName.DENSE, True), threading.Event()
             )
+            preset_summary = ModelSummaryService.preview(profile, ModelName.DENSE, True)
+            self.assertEqual(preset_summary.source, "preset")
+            self.assertEqual(preset_summary.model_name, ModelName.DENSE)
+            self.assertEqual(preset_summary.labels, profile.sgt.gestures)
+            self.assertEqual(preset_summary.channels, profile.device.channels)
+            self.assertGreater(preset_summary.parameter_count, 0)
+            self.assertEqual(
+                preset_summary.parameter_count, preset_summary.trainable_parameter_count
+            )
+            self.assertIn("DenseEMGClassifier", preset_summary.module_tree)
+
+            checkpoint_summary = ModelSummaryService.checkpoint(checkpoint)
+            self.assertEqual(checkpoint_summary.source, "checkpoint")
+            self.assertEqual(checkpoint_summary.checkpoint, checkpoint.resolve())
+            self.assertEqual(checkpoint_summary.labels, profile.sgt.gestures)
+            self.assertIsNotNone(checkpoint_summary.validation_loss)
+            self.assertIsNotNone(checkpoint_summary.validation_accuracy)
+            self.assertEqual(
+                ModelSummaryService.checkpoint(checkpoint.with_suffix(".onnx")),
+                checkpoint_summary,
+            )
             model_metadata = json.loads(
                 (checkpoint.parent / "metadata.json").read_text(encoding="utf-8")
             )
@@ -225,6 +247,10 @@ class SyntheticWorkflowTests(unittest.TestCase):
             suite = run_inference_benchmark_suite(checkpoint, iterations=2, warmup=0)
             self.assertIn(("onnx", "cpu"), {(item.backend, item.device) for item in suite})
             self.assertIn(("torch", "cpu"), {(item.backend, item.device) for item in suite})
+
+    def test_model_summary_rejects_missing_checkpoints(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, self.assertRaises(ArtifactError):
+            ModelSummaryService.checkpoint(Path(directory) / "missing.pt")
 
     def test_discrete_model_returns_full_activation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
