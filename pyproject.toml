@@ -23,7 +23,7 @@ dependencies = [
     "pyarrow>=25",
     "pyserial>=3.5,<4",
     "scikit-learn>=1.7,<2",
-    "sifi-streamer @ git+https://github.com/BLINCdev/sifi-streamer.git@v0.6.4",
+    "sifi-streamer @ git+https://github.com/ShriramRaghu-UofA/sifi-streamer.git@v0.6.4",
     "torch>=2.8,<3",
     "uvicorn>=0.35,<1",
 ]
