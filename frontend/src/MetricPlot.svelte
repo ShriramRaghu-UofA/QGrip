@@ -9,10 +9,6 @@
 
   /** Attach and clean up a compact uPlot confidence/activation visualization. */
   const renderPlot: Attachment<HTMLDivElement> = (container) => {
-    const values = history.length ? history : [{ confidence: 0, activation: 0 }];
-    const time = values.map((_, index) => index);
-    const confidence = values.map((value) => value.confidence);
-    const activation = values.map((value) => value.activation);
     const instance = new uPlot(
       {
         width: Math.max(320, container.clientWidth),
@@ -25,9 +21,23 @@
           { label: 'Activation', stroke: '#bd93f9', width: 2 },
         ],
       },
-      [time, confidence, activation],
+      [[0], [0], [0]],
       container,
     );
+
+    // Keep the third-party widget mounted while live predictions arrive. Reading
+    // `history` in the attachment itself would make Svelte destroy and recreate
+    // the plot for every sample, briefly collapsing its height and disturbing the
+    // page's scroll position.
+    $effect(() => {
+      const values = history.length ? history : [{ confidence: 0, activation: 0 }];
+      instance.setData([
+        values.map((_, index) => index),
+        values.map((value) => value.confidence),
+        values.map((value) => value.activation),
+      ]);
+    });
+
     return () => instance.destroy();
   };
 </script>

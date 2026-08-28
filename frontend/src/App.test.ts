@@ -3,8 +3,17 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import App from "./App.svelte";
 
+const { plotConstructor } = vi.hoisted(() => ({
+  plotConstructor: vi.fn(),
+}));
+
 vi.mock("uplot", () => ({
   default: class {
+    constructor() {
+      plotConstructor();
+    }
+
+    setData(): void {}
     destroy(): void {}
   },
 }));
@@ -39,6 +48,7 @@ function modelSummary(path: string): object {
 }
 
 beforeEach(() => {
+  plotConstructor.mockClear();
   localStorage.clear();
   vi.stubGlobal(
     "fetch",
@@ -312,6 +322,7 @@ test("live inference renders backend predictions", async () => {
   await waitFor(() => expect(screen.getByText("91%")).toBeInTheDocument(), {
     timeout: 2000,
   });
+  expect(plotConstructor).toHaveBeenCalledTimes(1);
   expect(screen.getByText("open")).toBeInTheDocument();
   expect(screen.getByText("64%")).toBeInTheDocument();
   expect(screen.getByText(/Device loss: 3/)).toBeInTheDocument();
