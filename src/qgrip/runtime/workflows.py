@@ -133,6 +133,32 @@ class CalibrationService:
             with runtime.controller:
                 labels = ("rest", *(g for g in profile.sgt.gestures if g != "rest"))
                 for index, gesture in enumerate(labels, start=1):
+                    preparation_seconds = profile.sgt.preparation_seconds
+                    preparation_started = time.monotonic()
+                    while (elapsed := time.monotonic() - preparation_started) < preparation_seconds:
+                        if progress:
+                            progress(
+                                SGTProgress(
+                                    JobState.RUNNING,
+                                    gesture=gesture,
+                                    stage="preparation",
+                                    instruction=_stage_instruction("preparation", gesture),
+                                    stimulus_image=_stimulus_image(profile, gesture),
+                                    trial=index - 1,
+                                    total_trials=len(labels),
+                                    elapsed_seconds=elapsed,
+                                    duration_seconds=preparation_seconds,
+                                    activation=0.0 if gesture == "rest" else 1.0,
+                                    capture=output,
+                                )
+                            )
+                        if cancel.wait(
+                            min(
+                                profile.sgt.progress_interval_seconds,
+                                preparation_seconds - elapsed,
+                            )
+                        ):
+                            raise InterruptedError("calibration cancelled")
                     seconds = (
                         profile.sgt.calibration_rest_seconds
                         if gesture == "rest"

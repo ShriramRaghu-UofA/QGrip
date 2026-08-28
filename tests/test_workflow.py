@@ -442,6 +442,38 @@ class SyntheticWorkflowTests(unittest.TestCase):
             self.assertEqual(final.trial, len(profile.sgt.gestures))
             self.assertEqual(final.total_trials, len(profile.sgt.gestures))
 
+    def test_calibration_preparation_precedes_each_recorded_gesture(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            profile = load_profile(write_profile(Path(directory)))
+            progress: list[SGTProgress] = []
+            captured: list[Path] = []
+
+            def parse_capture(capture: Path, _profile: object, output: Path) -> Path:
+                metadata, rows = read_capture(capture)
+                self.assertEqual(metadata.kind, "capture")
+                list(rows)
+                captured.append(capture)
+                return output
+
+            with patch("qgrip.runtime.workflows.derive_calibration", side_effect=parse_capture):
+                CalibrationService().run("s", profile, threading.Event(), progress.append)
+
+            self.assertEqual(len(captured), 1)
+            runs: list[str | None] = []
+            for item in progress:
+                if not runs or runs[-1] != item.stage:
+                    runs.append(item.stage)
+            for index, stage in enumerate(runs):
+                if stage == "calibration":
+                    self.assertGreater(index, 0)
+                    self.assertEqual(runs[index - 1], "preparation")
+            preparations = [item for item in progress if item.stage == "preparation"]
+            self.assertEqual(preparations[0].gesture, "rest")
+            self.assertEqual(preparations[0].duration_seconds, profile.sgt.preparation_seconds)
+            self.assertTrue(
+                any(item.gesture != "rest" and item.activation == 1.0 for item in preparations)
+            )
+
     def test_sgt_completion_emits_final_trial_progress(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             profile = load_profile(write_profile(Path(directory)))
